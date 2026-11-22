@@ -180,15 +180,20 @@ def get_access_token():
 
 
 def send_kakao(access_token, text):
+    """버튼 없이 보내 봄. 카카오가 버튼 없는 형식을 거절하면 작은 '확인' 버튼으로 다시 보냄"""
     template = {"object_type": "text", "text": text,
-                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL},
-                "button_title": "토스증권 열기"}
-    r = requests.post(KAKAO_SEND_URL, timeout=10,
-                      headers={"Authorization": f"Bearer {access_token}"},
-                      data={"template_object": json.dumps(template, ensure_ascii=False)})
-    ok = r.status_code == 200 and r.json().get("result_code") == 0
-    if not ok:
-        raise RuntimeError(f"카톡 보내기 실패 {r.status_code}: {r.text[:300]}")
+                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}
+    r = None
+    for extra in ({"buttons": []}, {"button_title": "확인"}):
+        r = requests.post(KAKAO_SEND_URL, timeout=10,
+                          headers={"Authorization": f"Bearer {access_token}"},
+                          data={"template_object": json.dumps({**template, **extra}, ensure_ascii=False)})
+        try:
+            if r.status_code == 200 and r.json().get("result_code") == 0:
+                return
+        except ValueError:
+            pass
+    raise RuntimeError(f"카톡 보내기 실패 {r.status_code}: {r.text[:300]}")
 
 
 def connect(code_or_url):
