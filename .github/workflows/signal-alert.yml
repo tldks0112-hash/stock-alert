@@ -1,15 +1,15 @@
-name: 매매 신호 알림
+name: 아침 작업
 
 on:
   schedule:
-    - cron: "30 22 * * 1-5"   # 한국 시간 화~토 오전 7:30 (미국 장 마감 후). GitHub 사정으로 조금 늦을 수 있어요.
-  workflow_dispatch:           # 휴대폰 GitHub 앱에서 'Run workflow'로 지금 바로 받기
+    - cron: "33 22 * * 1-5"   # 한국 시간 화~토 오전 7:33
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  alert:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,18 +18,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 프로그램 준비
+      - name: 준비
         run: pip install -q yfinance pandas requests
 
-      - name: 신호 계산하고 카톡 보내기
+      - name: 실행
         env:
+          ALERT_SETTINGS: ${{ secrets.ALERT_SETTINGS }}
           KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
           NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
         run: python signal_alert.py
 
-      - name: 새 카카오 토큰 저장 (한 달에 한 번 정도 생겨요)
+      - name: 토큰 저장
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -38,5 +39,5 @@ jobs:
           if [ -s "$TOKEN_FILE" ]; then
             gh secret set KAKAO_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"
             rm -f "$TOKEN_FILE"
-            echo "카카오 토큰을 새것으로 저장했어요."
+            echo "토큰 저장 완료"
           fi
