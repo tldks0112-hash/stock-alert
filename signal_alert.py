@@ -6,6 +6,7 @@
 #   python signal_alert.py connect 코드 → 처음 한 번 카카오 연결 ('카카오 연결' 실행이 씀)
 
 import contextlib
+import hashlib
 import io
 import json
 import logging
@@ -39,10 +40,7 @@ BUDGET_PER_STOCK_USD = SETTINGS.get("종목당_달러", 100)
 RULE = dict(ma_s=20, ma_l=50, rsi_buy=70, rsi_sell=80, trend=True, sl=0.07)
 RULE.update(SETTINGS.get("아침_규칙", {}))
 ONLY_WHEN_SIGNAL = SETTINGS.get("신호_있는_날만", False)
-# 카톡 아래 버튼: 누르면 '점검 작업'(2년 가상 시뮬레이션) 실행 화면이 열려요. 저장소 주소는 GitHub가 자동으로 알려줌
-_REPO = os.environ.get("GITHUB_REPOSITORY", "")
-LINK_URL = f"https://github.com/{_REPO}/actions/workflows/verify.yml" if _REPO else "https://github.com"
-BUTTON_TITLE = "가상 시뮬레이션"        # 카카오 권장: 8자 이하
+BUTTON_TITLE = "가상 시뮬레이션"        # 카톡 아래 버튼 이름 (카카오 권장: 8자 이하)
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -60,6 +58,23 @@ REDIRECT_URI = "https://localhost"
 KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_SEND_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 KST = ZoneInfo("Asia/Seoul")
+
+
+def report_key():
+    """시뮬레이션 페이지의 숨은 주소 (카카오 키로 만들어서 남들은 알 수 없음)"""
+    return hashlib.sha256(("sim|" + REST_KEY).encode()).hexdigest()[:20] if REST_KEY else "report"
+
+
+def report_url():
+    """카톡 버튼을 누르면 열리는 2년 가상 시뮬레이션 표·그래프 페이지 (GitHub Pages)"""
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" not in repo:
+        return "https://tossinvest.com"
+    owner, name = repo.split("/", 1)
+    return f"https://{owner.lower()}.github.io/{name}/{report_key()}.html"
+
+
+LINK_URL = report_url()
 
 
 # ---------- 신호 계산 (5단계와 같은 규칙) ----------

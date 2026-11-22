@@ -5,15 +5,18 @@
 # 새 알림 설정이 앞 1년·뒤 1년 모두 통했는지(안정성)도 같이 봐요. 결과는
 # 돈(만원)으로 바꾸고, 그냥 들고 있었을 때와 나란히 카톡으로만 보내요.
 # 공개 실행 기록에는 종목 수만 남겨요.
+# 표·그래프로 된 결과 페이지도 만들어요 (카톡 '가상 시뮬레이션' 버튼이 여는 숨은 주소의 페이지).
+# 페이지에는 종목 이름 없이 시장별 결과만 들어가요.
 #
 #   python backtest_check.py           → 계산 + 카톡 보내기 ('점검 작업'이 씀)
 #   python backtest_check.py preview   → 카톡 없이 화면에 출력
 
 import bisect
+import html
 import os
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -298,7 +301,7 @@ def main():
         buys = {(sid, k): [] for sid, _, _ in strats for k in ks}
         six = {k: {} for k in ks}                       # ⑥ 거래 기록 (⑦ 계산용)
         hist = {k: {} for k in ks}                      # 성적표용 기록 (필터 전 알림 전부)
-        sells, hold = [], []                                    # hold: 같은 기간 그냥 들고 있었을 때 수익률
+        sells, hold, old_trades = [], [], []                    # hold: 같은 기간 그냥 들고 있었을 때 수익률
         for t in tickers:
             stats["checked"] += 1
             try:
@@ -312,6 +315,8 @@ def main():
                     for k in ks:
                         r = simulate_buys(h, alerts, k, **opt)
                         buys[(sid, k)] += r["rets"]
+                        if sid == "①" and k == cur:
+                            old_trades += r["trades"]
                         if sid == "⑥":
                             six[k][t] = r["trades"]
                 for k in ks:
@@ -335,9 +340,18 @@ def main():
         live_trades = seven.get(cur, []) if live == "⑦" else [x for ts in six.get(cur, {}).values() for x in ts]
         results[market] = {"buys": buys, "sells": sells, "hold": hold, "strats": strats, "cur": cur,
                            "live": live, "live_trades": live_trades, "span": span, "ks": ks,
-                           "earn_ok": any(earn.values()) if earn else None}
+                           "earn_ok": any(earn.values()) if earn else None, "old_trades": old_trades}
 
-    messages = build_messages(results)
+    made = datetime.now(rt.KST)
+    out_dir = os.environ.get("REPORT_DIR", "_site")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"{base.report_key()}.html"), "w", encoding="utf-8") as f:
+        f.write(build_report(results, made))
+    with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write('<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>.</title>')
+
+    full = base.SETTINGS.get("점검_카톡_전체", False)                # true면 예전처럼 카톡으로 전부 받기
+    messages = build_messages(results) if full else build_short(results)
     if preview:
         print("\n\n".join(messages))
     else:
@@ -461,11 +475,208 @@ def build_messages(results):
     lines.append("5번이면 동전 던지기 수준이에요")
     msgs += pack(lines)
 
-    tail = []
-    if any(r.get("earn_ok") is False for r in results.values()):
-        tail.append("⚠️ 실적 발표일을 못 받아서 실적 피하기는 빠진 결과예요")
-    msgs += pack(["🧭 결론"] + verdicts + tail + ["과거 성적이 미래 수익을 보장하진 않아요"])
+    msgs += pack(["🧭 결론"] + verdicts + notes(results))
     return msgs
+
+
+def notes(results):
+    out = []
+    if any(r.get("earn_ok") is False for r in results.values()):
+        out.append("⚠️ 실적 발표일을 못 받아서 실적 피하기는 빠진 결과예요")
+    return out + ["과거 성적이 미래 수익을 보장하진 않아요"]
+
+
+def all_verdicts(results):
+    out = []
+    for market, r in results.items():
+        rows, hold_total, _ = market_result(r)
+        out.append(verdict(rt.MARKET_NAME[market], rows, hold_total, r["cur"], r["strats"], r["live"]))
+    return out
+
+
+def build_short(results):
+    """카톡엔 요약만: 시장별 한 줄 + 결론. 표·그래프는 '가상 시뮬레이션' 버튼 페이지에서"""
+    lines = ["📊 2년 가상 시뮬레이션 업데이트", "알림마다 100만원씩 샀다고 치면"]
+    for market, r in results.items():
+        rows, hold_total, _ = market_result(r)
+        new, old = rows.get((r["live"], r["cur"])), rows.get(("①", r["cur"]))
+        part = [f"⭐ {won(new['total'])}" if new else "⭐ 거래 없음"]
+        if old:
+            part.append(f"예전 {won(old['total'])}")
+        if hold_total is not None:
+            part.append(f"보유 {won(hold_total)}")
+        lines.append(f"{rt.MARKET_NAME[market]} " + " · ".join(part))
+    lines.append("👇 '가상 시뮬레이션'을 누르면 표·그래프로 봐요")
+    return pack(lines, 200) + pack(["🧭 결론"] + all_verdicts(results) + notes(results))
+
+
+# ---------- 표·그래프 페이지 ----------
+
+def _cls(v):
+    return "pos" if v > 0.05 else ("neg" if v < -0.05 else "")
+
+
+def cum_chart(series, span):
+    """누적 손익(만원) 선 그래프. series: [(이름, 색, 점선?, [(시각, 거래 손익)])]"""
+    W, H, L, R, T, B = 640, 220, 46, 12, 12, 26
+    pts_all = []
+    lines_xy = []
+    for name, color, dash, trades in series:
+        cum, pts = 0.0, [(span[0], 0.0)]
+        for t, v in sorted(trades, key=lambda x: x[0]):
+            cum += v
+            pts.append((t, cum))
+        pts.append((span[1], cum))
+        lines_xy.append((name, color, dash, pts))
+        pts_all += [y for _, y in pts]
+    lo, hi = min(pts_all + [0.0]), max(pts_all + [0.0])
+    if hi - lo < 1:
+        hi, lo = hi + 1, lo - 1
+    t0, t1 = span[0].timestamp(), span[1].timestamp()
+
+    def X(t):
+        return L + (t.timestamp() - t0) / max(t1 - t0, 1) * (W - L - R)
+
+    def Y(v):
+        return T + (hi - v) / (hi - lo) * (H - T - B)
+
+    out = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="누적 손익 그래프">']
+    for v in (hi, (hi + lo) / 2, lo):
+        out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" class="grid"/>'
+                   f'<text x="{L - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" class="ax">{v:,.0f}</text>')
+    out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(0):.1f}" y2="{Y(0):.1f}" class="zero"/>')
+    mid = span[0] + (span[1] - span[0]) / 2
+    for t, anchor in ((span[0], "start"), (mid, "middle"), (span[1], "end")):
+        out.append(f'<text x="{X(t):.1f}" y="{H - 6}" text-anchor="{anchor}" class="ax">{t:%y.%m}</text>')
+    for name, color, dash, pts in lines_xy:
+        d = " ".join(f"{X(t):.1f},{Y(v):.1f}" for t, v in pts)
+        style = ' stroke-dasharray="5 4"' if dash else ""
+        out.append(f'<polyline points="{d}" fill="none" stroke="{color}" stroke-width="2.2"{style}/>')
+    out.append("</svg>")
+    legend = "".join(f'<span><i style="background:{c}"></i>{html.escape(n)}</span>' for n, c, _, _ in series)
+    return "".join(out) + f'<div class="legend">{legend}</div>'
+
+
+def market_section(market, r):
+    name, cur, live = rt.MARKET_NAME[market], r["cur"], r["live"]
+    rows, hold_total, n_hold = market_result(r)
+    new, old = rows.get((live, cur)), rows.get(("①", cur))
+    e = html.escape
+
+    def kpi(title, x, sub):
+        if x is None:
+            return f'<div class="kpi"><span>{title}</span><b>거래 없음</b><em>{sub}</em></div>'
+        return f'<div class="kpi"><span>{title}</span><b class="{_cls(x)}">{won(x)}</b><em>{sub}</em></div>'
+
+    out = [f'<section><h2>{e(name)} <small>{n_hold}종목 · 기준 {cur}점</small></h2><div class="kpis">']
+    out.append(kpi("⭐ 새 알림", new["total"] if new else None,
+                   f'{new["n"]}번 · 승률 {new["win"] / new["n"] * 100:.0f}%' if new else "2년간 매수 없음"))
+    out.append(kpi("예전 알림", old["total"] if old else None,
+                   f'{old["n"]}번 · 승률 {old["win"] / old["n"] * 100:.0f}%' if old else ""))
+    out.append(kpi("그냥 보유", hold_total, f"{n_hold}종목 100만원씩"))
+    out.append("</div>")
+
+    if r["span"][0] is not None:
+        series = [("⭐ 새 알림", "var(--star)", False, [(x["tx"], x["ret"] * UNIT) for x in r["live_trades"]]),
+                  ("예전 알림", "var(--old)", True, [(x["tx"], x["ret"] * UNIT) for x in r["old_trades"]])]
+        out.append('<h3>2년 동안 쌓인 손익 (만원)</h3>' + cum_chart(series, r["span"]))
+
+    biggest = max([abs(x["total"]) for x in rows.values()] + [1])
+    out.append('<h3>방법별 비교</h3><table><tr><th>방법</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
+    for sid, title, _ in r["strats"]:
+        x = rows.get((sid, cur))
+        star = " ⭐" if sid == live else ""
+        if not x:
+            out.append(f'<tr><td>{sid} {e(title)}{star}</td><td colspan="3" class="mut">거래 없음</td></tr>')
+            continue
+        w = abs(x["total"]) / biggest * 100
+        out.append(f'<tr{" class=hl" if sid == live else ""}><td>{sid} {e(title)}{star}</td>'
+                   f'<td><div class="bar {_cls(x["total"])}" style="width:{w:.0f}%"></div>'
+                   f'<span class="{_cls(x["total"])}">{won(x["total"])}</span></td>'
+                   f'<td>{x["win"] / x["n"] * 100:.0f}%</td><td>{x["n"]}번</td></tr>')
+    out.append("</table>")
+
+    out.append('<h3>⭐ 새 알림 안전도 기준별</h3><table><tr><th>기준</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
+    for k in r["ks"]:
+        x = rows.get((live, k))
+        mark = " ← 지금" if k == cur else ""
+        if x:
+            out.append(f'<tr><td>{k}점{mark}</td><td class="{_cls(x["total"])}">{won(x["total"])}</td>'
+                       f'<td>{x["win"] / x["n"] * 100:.0f}%</td><td>{x["n"]}번</td></tr>')
+        else:
+            out.append(f'<tr><td>{k}점{mark}</td><td colspan="3" class="mut">거래 없음</td></tr>')
+    out.append("</table>")
+
+    st = stability_lines(market, r)
+    out.append('<h3>🧪 안정성 검사</h3><ul class="st">' + "".join(f"<li>{e(x.strip())}</li>" for x in st) + "</ul>")
+    v = verdict(name, rows, hold_total, cur, r["strats"], live).split("\n")
+    out.append('<div class="verdict">' + "<br>".join(e(x.strip()) for x in v) + "</div></section>")
+    return "".join(out)
+
+
+def build_report(results, made):
+    e = html.escape
+    sells = []
+    for market, r in results.items():
+        x = np.array(r["sells"])
+        txt = f"10번 중 {round((x < 0).mean() * 10)}번 맞음 ({len(x)}번 중)" if len(x) else "매도 알림 없음"
+        sells.append(f"<tr><td>{e(rt.MARKET_NAME[market])}</td><td>{txt}</td></tr>")
+    body = "".join(market_section(m, r) for m, r in results.items())
+    return f"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>2년 가상 시뮬레이션</title>
+<style>
+:root{{--bg:#f6f7f9;--card:#fff;--ink:#191f28;--mut:#8b95a1;--line:#e5e8eb;--pos:#f04452;--neg:#3182f6;
+--star:#f04452;--old:#8b95a1;--hl:#fff7e6}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#101215;--card:#1b1e23;--ink:#e9ecef;--mut:#8b95a1;
+--line:#2b3036;--hl:#2a2416}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}}
+main{{max-width:720px;margin:0 auto;padding:16px}}
+header h1{{font-size:21px;margin:8px 0 2px}}header p{{margin:0;color:var(--mut);font-size:13px}}
+section{{background:var(--card);border-radius:16px;padding:16px;margin:14px 0}}
+h2{{font-size:18px;margin:0 0 10px}}h2 small{{color:var(--mut);font-weight:400;font-size:13px}}
+h3{{font-size:14px;margin:18px 0 6px;color:var(--mut)}}
+.kpis{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}}
+.kpi{{border:1px solid var(--line);border-radius:12px;padding:10px}}
+.kpi span{{display:block;font-size:12px;color:var(--mut)}}.kpi b{{display:block;font-size:18px;margin:2px 0}}
+.kpi em{{font-style:normal;font-size:11px;color:var(--mut)}}
+.pos{{color:var(--pos)}}.neg{{color:var(--neg)}}.mut{{color:var(--mut)}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{text-align:left;color:var(--mut);font-weight:500;border-bottom:1px solid var(--line);padding:6px 4px}}
+td{{border-bottom:1px solid var(--line);padding:7px 4px;position:relative}}
+tr.hl td{{background:var(--hl)}}
+td .bar{{position:absolute;left:0;top:6px;bottom:6px;opacity:.15;border-radius:4px}}
+td .bar.pos{{background:var(--pos)}}td .bar.neg{{background:var(--neg)}}td span{{position:relative}}
+svg{{width:100%;height:auto;display:block}}
+svg .grid{{stroke:var(--line)}}svg .zero{{stroke:var(--mut);stroke-width:1}}
+svg .ax{{fill:var(--mut);font-size:11px}}
+.legend{{display:flex;gap:14px;font-size:12px;color:var(--mut);margin-top:4px}}
+.legend i{{display:inline-block;width:14px;height:3px;margin-right:5px;vertical-align:middle}}
+ul.st{{margin:0;padding-left:18px;font-size:13px}}
+.verdict{{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--bg);font-size:13px}}
+footer{{color:var(--mut);font-size:12px;padding:8px 4px 30px}}
+</style></head><body><main>
+<header><h1>📊 2년 가상 시뮬레이션</h1>
+<p>{made:%Y-%m-%d %H:%M} 기준 · 알림이 올 때마다 100만원씩 안전 매수가에 샀다고 치고 지난 2년을 다시 돌려 봤어요.
+수수료 {FEE * 100:.1f}% 포함 · 수익은 빨강, 손실은 파랑</p></header>
+{body}
+<section><h2>🔵 매도 알림이 맞았나?</h2><p class="mut" style="margin:0 0 6px;font-size:13px">
+매도 알림 {SELL_CHECK_DAYS}일 뒤 실제로 내렸는지 · 10번 중 5번이면 동전 던지기 수준</p>
+<table>{"".join(sells)}</table></section>
+<section><h2>방법 설명</h2><ul class="st">
+<li>① 예전 알림: 손실 방지 장치 없이 안전도만 보고 알림</li>
+<li>② 시장필터 ③ 추세필수 ④ 눌림매수 ⑤ 반매도: 장치를 하나씩만 켠 경우</li>
+<li>⑥ 장치전부: ②~⑤ + 변동성·실적 발표 피하기·하루 한 번</li>
+<li>⑦ ⑥ + 성적표(과거 수익 난 종목만) + 연속 손실 자동 멈춤</li>
+<li>⭐ 지금 실제로 쓰고 있는 새 알림 설정</li></ul></section>
+<footer>{"<br>".join(e(x) for x in notes(results))}</footer>
+</main></body></html>"""
+
+
+
 
 
 def drawdown(vals):
