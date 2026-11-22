@@ -1,0 +1,78 @@
+name: 실시간 타점 알림 (미장·국장·코인)
+
+on:
+  schedule:
+    - cron: "*/15 0-6,13-21 * * 1-5"   # 평일 국장·미장 시간: 15분마다
+    - cron: "0,30 7-12,22-23 * * 1-5"  # 평일 그 밖의 시간: 30분마다 (코인)
+    - cron: "0,30 * * * 0,6"           # 주말: 30분마다 (코인)
+  workflow_dispatch:                    # 지금 바로 확인 (장이 닫혀 있으면 마지막 데이터로 확인)
+
+concurrency:
+  group: realtime-alert
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-slim          # 1코어 실행기 (요금이 일반 실행기의 1/3)
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 프로그램 준비
+        run: pip install -q yfinance pandas requests
+
+      - name: 최근 보낸 알림 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: .alert_state
+          key: alert-state-${{ github.run_id }}
+          restore-keys: alert-state-
+
+      - name: 타점 확인하고 카톡 보내기
+        env:
+          KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: python realtime_alert.py
+
+      - name: 보낸 알림 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .alert_state
+          key: alert-state-${{ github.run_id }}
+
+      - name: 새 카카오 토큰 저장 (한 달에 한 번 정도 생겨요)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+        run: |
+          if [ -s "$TOKEN_FILE" ]; then
+            pip install -q pynacl
+            python - <<'PY'
+          import base64, os, requests
+          from nacl import encoding, public
+          repo, tok = os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"]
+          h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28"}
+          k = requests.get(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=h, timeout=10).json()
+          box = public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder()))
+          value = open(os.environ["TOKEN_FILE"]).read().strip()
+          enc = base64.b64encode(box.encrypt(value.encode())).decode()
+          r = requests.put(f"https://api.github.com/repos/{repo}/actions/secrets/KAKAO_REFRESH_TOKEN",
+                           headers=h, json={"encrypted_value": enc, "key_id": k["key_id"]}, timeout=10)
+          r.raise_for_status()
+          print("카카오 토큰을 새것으로 저장했어요.")
+          PY
+            rm -f "$TOKEN_FILE"
+          fi
