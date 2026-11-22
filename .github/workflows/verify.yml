@@ -2,14 +2,24 @@ name: 점검 작업
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "47 23 * * 6"      # 매주 일요일 아침 8시 47분(한국)에 새로 계산해서 페이지도 새로 고침
 
 permissions:
   contents: read
+  pages: write        # 시뮬레이션 표·그래프 페이지 올리기
+  id-token: write
+
+concurrency:
+  group: verify
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    environment:
+      name: github-pages
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +37,7 @@ jobs:
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
           NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+          REPORT_DIR: _site
         run: python backtest_check.py
 
       - name: 토큰 저장
@@ -40,3 +51,12 @@ jobs:
             rm -f "$TOKEN_FILE"
             echo "토큰 저장 완료"
           fi
+
+      - name: 페이지 파일 묶기
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+          retention-days: 1
+
+      - name: 페이지 올리기
+        uses: actions/deploy-pages@v4
