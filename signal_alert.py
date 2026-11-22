@@ -5,7 +5,10 @@
 #   python signal_alert.py preview    → 카톡 없이 화면에만 출력 (확인용)
 #   python signal_alert.py connect 코드 → 처음 한 번 카카오 연결 ('카카오 연결' 실행이 씀)
 
+import contextlib
+import io
 import json
+import logging
 import os
 import sys
 import time
@@ -15,13 +18,37 @@ from zoneinfo import ZoneInfo
 import requests
 import yfinance as yf
 
-# ======================= 설정 (GitHub에서 이 부분만 고치면 돼요) =======================
+# ======================= 설정 =======================
+# 종목·금액·기준은 코드에 적지 않고, GitHub 비밀값 ALERT_SETTINGS(JSON)에서 읽어요.
+# 저장소를 공개해도 남들은 무엇을 보는지 알 수 없어요.
 
-TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "SPY"]   # 신호를 받을 종목
-BUDGET_PER_STOCK_USD = 300      # 종목당 살 금액 → 몇 주 살지 계산해서 알려줌
-RULE = dict(ma_s=20, ma_l=50, rsi_buy=70, rsi_sell=80, trend=True, sl=0.07)   # 5단계에서 정한 규칙
-ONLY_WHEN_SIGNAL = False        # True면 매수/매도 신호가 있는 날만 카톡을 보냄
+
+def load_settings():
+    raw = os.environ.get("ALERT_SETTINGS", "").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        sys.exit("❗ 비밀값 ALERT_SETTINGS의 형식이 잘못됐어요. 따옴표·쉼표·괄호를 확인해 주세요.")
+
+
+SETTINGS = load_settings()
+TICKERS = [t for group in SETTINGS.get("미장", {}).values() for t in group]   # 아침 요약: 미장 종목
+BUDGET_PER_STOCK_USD = SETTINGS.get("종목당_달러", 100)
+RULE = dict(ma_s=20, ma_l=50, rsi_buy=70, rsi_sell=80, trend=True, sl=0.07)
+RULE.update(SETTINGS.get("아침_규칙", {}))
+ONLY_WHEN_SIGNAL = SETTINGS.get("신호_있는_날만", False)
 LINK_URL = "https://tossinvest.com"   # 카톡 버튼을 누르면 열리는 주소
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
+@contextlib.contextmanager
+def quiet():
+    """데이터 라이브러리가 종목 이름이 담긴 경고를 기록에 찍지 않도록 막음"""
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
 
 # ======================= 여기부터는 고칠 필요 없어요 =======================
 
@@ -59,7 +86,8 @@ def get_signal(ticker):
     df = None
     for attempt in range(3):            # 데이터 서버가 잠깐 막히면 조금 쉬었다 재시도
         try:
-            df = yf.Ticker(ticker).history(period="2y")
+            with quiet():
+                df = yf.Ticker(ticker).history(period="2y")
             if df is not None and not df.empty:
                 break
         except Exception:
@@ -192,18 +220,21 @@ def main():
         connect(sys.argv[2])
         return
 
+    if not TICKERS:
+        sys.exit("❗ 비밀값 ALERT_SETTINGS에 미장 종목이 없어요.")
     lines, has_signal = build_lines()
-    print("\n".join(lines))
     if mode == "preview":
+        print("\n".join(lines))
         return
+    print(f"확인 끝: {len(TICKERS)}개")          # 공개 기록에는 종목 이름을 남기지 않음
     if ONLY_WHEN_SIGNAL and not has_signal:
-        print("오늘은 매수/매도 신호가 없어서 카톡을 보내지 않았어요.")
+        print("완료")
         return
     token = get_access_token()
     for msg in chunk(lines):
         send_kakao(token, msg)
         time.sleep(1)
-    print("카톡 전송 완료")
+    print("완료")
 
 
 if __name__ == "__main__":

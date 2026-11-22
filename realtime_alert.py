@@ -23,36 +23,24 @@ import yfinance as yf
 
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
-# ======================= 설정 (여기만 고치면 돼요) =======================
+# ======================= 설정 =======================
+# 종목·카테고리·금액·기준은 코드에 적지 않고 GitHub 비밀값 ALERT_SETTINGS(JSON)에서 읽어요.
+# 저장소를 공개해도 남들은 무엇을, 얼마로, 어떤 기준으로 보는지 알 수 없어요.
 
-# 시장 → 카테고리 → 종목. 카테고리 이름과 종목은 자유롭게 바꾸거나 늘려도 돼요.
-KR_STOCKS = {                                         # 코스닥 종목은 뒤에 .KQ (예: "247540.KQ": "에코프로비엠")
-    "반도체": {"005930.KS": "삼성전자", "000660.KS": "SK하이닉스"},
-    "자동차": {"005380.KS": "현대차"},
-    "인터넷": {"035420.KS": "NAVER", "035720.KS": "카카오"},
-    "2차전지": {"373220.KS": "LG에너지솔루션"},
-    "지수 ETF": {"069500.KS": "KODEX 200"},
-}
-US_STOCKS = {
-    "빅테크": {"AAPL": "애플", "MSFT": "마이크로소프트", "AMZN": "아마존", "META": "메타", "GOOGL": "구글"},
-    "반도체": {"NVDA": "엔비디아"},
-    "전기차": {"TSLA": "테슬라"},
-    "지수 ETF": {"SPY": "S&P500", "QQQ": "나스닥100"},
-}
-COINS = {
-    "메이저": {"BTC-KRW": "비트코인", "ETH-KRW": "이더리움"},
-    "알트코인": {"XRP-KRW": "리플", "SOL-KRW": "솔라나"},
-}
+S = base.SETTINGS
+KR_STOCKS = S.get("국장", {})      # 카테고리 → {종목코드: 이름}
+US_STOCKS = S.get("미장", {})
+COINS = S.get("코인", {})
 
-BUDGET_USD = 300            # 미국 주식 한 종목에 쓸 돈 ($)
-BUDGET_KRW = 400_000        # 국내 주식·코인 한 종목에 쓸 돈 (원)
-
-MIN_SCORE = 8               # 안전도 10점 중 몇 점 이상일 때만 알림 (안전 위주 기본값 8, 9~10이면 더 깐깐)
-CONFIRM_MIN = 3             # 돌파 후 몇 분 동안 유지돼야 진짜로 인정할지
-MIN_RR = 2.0                # 손익비(벌 수 있는 폭 ÷ 잃을 수 있는 폭) 최소 기준
-STOP_ATR = 0.5              # 손절가를 지지선 아래로 하루 변동폭(ATR)의 몇 배만큼 여유 둘지
-COOLDOWN_MIN = 120          # 같은 종목·같은 방향 알림은 몇 분 동안 다시 안 보낼지
-LOOKBACK_MIN = 20           # 최근 몇 분 안에 확정된 타점을 찾을지
+BUDGET_USD = S.get("종목당_달러", 100)
+BUDGET_KRW = S.get("종목당_원", 100_000)
+MIN_SCORE = S.get("안전도_기준", 8)          # 안전도 10점 중 몇 점 이상일 때만 알림
+CONFIRM_MIN = S.get("유지_확인_분", 3)        # 돌파 후 몇 분 유지돼야 인정할지
+MIN_RR = S.get("최소_손익비", 2.0)
+STOP_ATR = S.get("손절_여유_ATR", 0.5)
+COOLDOWN_MIN = S.get("같은_알림_간격_분", 120)
+LOOKBACK_MIN = 20
+VERBOSE = os.environ.get("VERBOSE") == "1"    # 1이면 종목별 자세한 기록 (공개 저장소에선 끄세요)
 
 # ======================= 여기부터는 고칠 필요 없어요 =======================
 
@@ -63,6 +51,11 @@ MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 STATE_DIR = ".alert_state"
 STATE_FILE = os.path.join(STATE_DIR, "sent.json")
+
+
+def log(msg):
+    if VERBOSE:
+        print(msg)
 
 
 # ---------- 시장 시간 ----------
@@ -94,11 +87,12 @@ def calm_time(market, ts):
 def fetch_many(tickers, period, interval):
     for attempt in range(3):
         try:
-            raw = yf.download(tickers, period=period, interval=interval, group_by="ticker",
-                              auto_adjust=True, progress=False, threads=True)
+            with base.quiet():
+                raw = yf.download(tickers, period=period, interval=interval, group_by="ticker",
+                                  auto_adjust=True, progress=False, threads=True)
             break
         except Exception as e:
-            print(f"데이터 받기 재시도 ({e})")
+            log(f"데이터 받기 재시도 ({e})")
             time.sleep(5 * (attempt + 1))
     else:
         return {}
@@ -403,7 +397,7 @@ def in_cooldown(state, key, now):
 
 # ---------- 실행 ----------
 
-def scan_market(market, cats, now, force, state, alerts):
+def scan_market(market, cats, now, force, state, alerts, stats):
     names = {t: n for group in cats.values() for t, n in group.items()}
     category = {t: c for c, group in cats.items() for t in group}
     tickers = list(names)
@@ -411,62 +405,75 @@ def scan_market(market, cats, now, force, state, alerts):
     hourly = fetch_many(tickers, "60d", "60m")
     minute = fetch_many(tickers, "2d", "1m")
     for t in tickers:
-        d, m = daily.get(t), minute.get(t)
-        if d is None or len(d) < 220 or m is None:
-            print(f"{t}: 데이터 부족 → 건너뜀")
-            continue
-        d, m = add_daily(d), add_minute(m, market)
-        h = add_hourly(hourly[t]) if t in hourly else None
-        if m is None:
-            print(f"{t}: 1분봉 부족 → 건너뜀")
-            continue
-        last_time = m.index[-1].to_pydatetime()
-        if not force and now - last_time > timedelta(minutes=45):
-            print(f"{t}: 최신 1분봉 없음 (휴장 또는 지연) → 건너뜀")
-            continue
+        stats["checked"] += 1
+        try:
+            check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts)
+        except Exception as e:
+            stats["failed"] += 1
+            log(f"{t}: 확인 실패 ({e})")
 
-        tz = TZ[market]
-        same_day = d.index[-1].tz_convert(tz).date() == last_time.astimezone(tz).date() \
-            if d.index.tz is not None else d.index[-1].date() == last_time.astimezone(tz).date()
-        prev_close = float(d["Close"].iloc[-2] if same_day else d["Close"].iloc[-1])
-        since = m.index[-1] - pd.Timedelta(minutes=LOOKBACK_MIN)
-        lv = safe_levels(market, d, h, m, same_day)
 
-        found = False
-        for side in ("buy", "sell"):
-            trig = find_trigger(m, side, since, market)
-            if not trig:
-                continue
-            found = True
-            checks = safety_checks(side, d, h, m, trig, lv, prev_close)
-            score = sum(bool(ok) for _, ok in checks)
-            key = f"tajum|{t}|{side}"
-            word = "매수" if side == "buy" else "매도"
-            if in_cooldown(state, key, now):
-                print(f"{t}: {word} 타점 (최근에 이미 알림)")
-            elif score < MIN_SCORE:
-                print(f"{t}: {word} 타점 있지만 안전도 {score}/10 → 알림 안 함")
-            else:
-                alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
-                               "side": side, "price": lv["price"],
-                               "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv)})
-        if not found:
-            print(f"{t}: 확정된 타점 없음")
+def check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts):
+    d, m = daily.get(t), minute.get(t)
+    if d is None or len(d) < 220 or m is None:
+        log(f"{t}: 데이터 부족 → 건너뜀")
+        return
+    d, m = add_daily(d), add_minute(m, market)
+    h = add_hourly(hourly[t]) if t in hourly else None
+    if m is None:
+        log(f"{t}: 1분봉 부족 → 건너뜀")
+        return
+    last_time = m.index[-1].to_pydatetime()
+    if not force and now - last_time > timedelta(minutes=45):
+        log(f"{t}: 최신 1분봉 없음 (휴장 또는 지연) → 건너뜀")
+        return
+
+    tz = TZ[market]
+    same_day = d.index[-1].tz_convert(tz).date() == last_time.astimezone(tz).date() \
+        if d.index.tz is not None else d.index[-1].date() == last_time.astimezone(tz).date()
+    prev_close = float(d["Close"].iloc[-2] if same_day else d["Close"].iloc[-1])
+    since = m.index[-1] - pd.Timedelta(minutes=LOOKBACK_MIN)
+    lv = safe_levels(market, d, h, m, same_day)
+
+    found = False
+    for side in ("buy", "sell"):
+        trig = find_trigger(m, side, since, market)
+        if not trig:
+            continue
+        found = True
+        checks = safety_checks(side, d, h, m, trig, lv, prev_close)
+        score = sum(bool(ok) for _, ok in checks)
+        key = f"tajum|{t}|{side}"
+        word = "매수" if side == "buy" else "매도"
+        if in_cooldown(state, key, now):
+            log(f"{t}: {word} 타점 (최근에 이미 알림)")
+        elif score < MIN_SCORE:
+            log(f"{t}: {word} 타점 있지만 안전도 {score}/10 → 알림 안 함")
+        else:
+            alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
+                           "side": side, "price": lv["price"],
+                           "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv)})
+    if not found:
+        log(f"{t}: 확정된 타점 없음")
 
 
 def main():
     force = os.environ.get("FORCE") == "1" or "force" in sys.argv
+    if not any(MARKETS.values()):
+        sys.exit("❗ 비밀값 ALERT_SETTINGS에 종목이 없어요. 설정 방법을 다시 확인해 주세요.")
     now = datetime.now(timezone.utc)
     state = load_state()
     alerts = []
+    stats = {"markets": 0, "checked": 0, "failed": 0}
     for market, cats in MARKETS.items():
         if not cats:
             continue
         if not is_open(market, now) and not force:
-            print(f"[{market}] 장 시간이 아니라 건너뜀")
+            log(f"[{market}] 장 시간이 아니라 건너뜀")
             continue
-        print(f"[{market}] 확인 중...")
-        scan_market(market, cats, now, force, state, alerts)
+        log(f"[{market}] 확인 중...")
+        stats["markets"] += 1
+        scan_market(market, cats, now, force, state, alerts, stats)
 
     if alerts:
         token = base.get_access_token()
@@ -482,11 +489,11 @@ def main():
             for a in items:
                 base.send_kakao(token, a["msg"])
                 state[a["key"]] = now.isoformat()
-                print(f"알림 보냄 → {a['key']}")
+                log(f"알림 보냄 → {a['key']}")
                 time.sleep(1)
-    else:
-        print("지금 보낼 안전 타점이 없어요.")
     save_state(state, now)
+    # 공개 기록에는 종목 이름 없이 숫자만 남김
+    print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개")
 
 
 if __name__ == "__main__":
