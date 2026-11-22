@@ -1,6 +1,7 @@
-# 안전도 기준 검증 — "과거에 이 기준대로 알림이 왔다면 어땠을까?"
+# 2년 모의투자 — "알림이 올 때마다 100만원씩 샀다면 얼마를 벌었을까?"
 # 최근 약 2년치 1시간봉으로, 실시간 알림과 똑같은 안전가·안전도 10점 계산을 돌려요.
-# 결과는 카톡으로만 보내고, 공개 실행 기록에는 숫자 몇 개만 남겨요.
+# 결과는 돈(만원)으로 바꿔서, 그냥 들고 있었을 때와 비교해 카톡으로만 보내요.
+# 공개 실행 기록에는 종목 수만 남겨요.
 #
 #   python backtest_check.py           → 계산 + 카톡 보내기 ('점검 작업'이 씀)
 #   python backtest_check.py preview   → 카톡 없이 화면에 출력
@@ -163,8 +164,9 @@ def main():
             continue
         daily = rt.fetch_many(tickers, "5y", "1d")
         hourly = rt.fetch_many(tickers, "730d", "60m")
-        buys = {(k, w): {"signals": 0, "filled": 0, "rets": []} for k in THRESHOLDS for w in (True, False)}
+        buys = {k: {"signals": 0, "filled": 0, "rets": []} for k in THRESHOLDS}
         sells = {k: [] for k in THRESHOLDS}
+        hold = []                                   # 같은 기간 그냥 들고 있었을 때 수익률
         for t in tickers:
             stats["checked"] += 1
             try:
@@ -173,18 +175,20 @@ def main():
                 d, h = rt.add_daily(daily[t]), prep_hourly(hourly[t], market)
                 alerts = find_alerts(market, d, h)
                 for k in THRESHOLDS:
-                    for w in (True, False):
-                        r = simulate_buys(h, alerts, k, w)
-                        b = buys[(k, w)]
-                        b["signals"] += r["signals"]
-                        b["filled"] += r["filled"]
-                        b["rets"] += r["rets"]
+                    r = simulate_buys(h, alerts, k, wait=True)
+                    b = buys[k]
+                    b["signals"] += r["signals"]
+                    b["filled"] += r["filled"]
+                    b["rets"] += r["rets"]
                     sells[k] += check_sells(h, alerts, k)
+                cl = h["Close"].to_numpy()
+                if len(cl) > 61:
+                    hold.append(cl[-1] / cl[60] - 1 - FEE)   # 알림을 찾기 시작한 때부터 끝까지
             except Exception as e:
                 stats["failed"] += 1
                 if rt.VERBOSE or preview:
                     print(f"{t}: 실패 ({e})")
-        results[market] = {"buys": buys, "sells": sells}
+        results[market] = {"buys": buys, "sells": sells, "hold": hold}
 
     messages = build_messages(results)
     if preview:
@@ -197,52 +201,144 @@ def main():
     print(f"점검 끝: 종목 {stats['checked']}개 · 실패 {stats['failed']}개")
 
 
+# ---------- 카톡 메시지 (돈으로 바꿔서 한눈에) ----------
+
+UNIT = 100                  # 알림마다 100만원씩 샀다고 계산 (단위: 만원)
+
+
+def u16len(s):
+    return len(s.encode("utf-16-le")) // 2          # 이모지를 2글자로 세는 경우까지 안전하게
+
+
+def pack(lines, limit=190):
+    """카톡 200자 제한 안에서 줄 단위로 묶기"""
+    msgs, cur = [], ""
+    for ln in lines:
+        joined = f"{cur}\n{ln}" if cur else ln
+        if u16len(joined) <= limit:
+            cur = joined
+        else:
+            if cur:
+                msgs.append(cur)
+            cur = ln
+    if cur:
+        msgs.append(cur)
+    return msgs
+
+
+def won(manwon, sign=True):
+    """만원 단위 숫자를 읽기 쉬운 돈으로: +1,240만원 / -35만원 / -3천원"""
+    s = ("+" if manwon > 0 else "-" if manwon < 0 else "") if sign else ("-" if manwon < 0 else "")
+    a = abs(manwon)
+    if a >= 1 or a == 0:
+        return f"{s}{a:,.0f}만원"
+    return f"{s}{a * 10:,.0f}천원"
+
+
+def bar(value, biggest):
+    """수익은 빨강, 손실은 파랑 (토스증권과 같은 색)"""
+    if biggest <= 0 or abs(value) < 0.5:
+        return "▫️"
+    n = max(1, round(abs(value) / biggest * 5))
+    return ("🟥" if value > 0 else "🟦") * n
+
+
+def market_result(r):
+    """기준별 총손익(만원)과 같은 기간 보유 손익"""
+    rows = {}
+    for k in THRESHOLDS:
+        rets = np.array(r["buys"][k]["rets"])
+        if len(rets):
+            rows[k] = {"n": len(rets), "win": int((rets > 0).sum()), "total": rets.sum() * UNIT}
+    hold = np.array(r["hold"])
+    return rows, (hold.sum() * UNIT if len(hold) else None), len(hold)
+
+
 def build_messages(results):
     cur = rt.MIN_SCORE
-    msgs = [("📊 안전도 기준 검증 (최근 약 2년, 1시간봉)\n"
-             "알림이 왔을 때 안전 매수가에 사서, 손절가·안전 매도가·"
-             f"{HOLD_DAYS}일 중 먼저 오는 때 판 것으로 계산했어요.\n"
-             f"수수료 {FEE * 100:.1f}% 반영 · 지금 기준 {cur}점")]
-    best = {}
-    for market, r in results.items():
-        lines = [f"{rt.MARKET_NAME[market]} 매수 검증 (안전가 대기)"]
-        for k in THRESHOLDS:
-            b = r["buys"][(k, True)]
-            s = summarize(b["rets"])
-            if s:
-                fill = b["filled"] / b["signals"] * 100 if b["signals"] else 0
-                lines.append(f"{k}점 {s['n']}회 승률{s['win']:.0f}% 평균{s['avg']:+.1f}% 체결{fill:.0f}%")
-                if s["n"] >= 15 and (market not in best or s["avg"] > best[market][1]):
-                    best[market] = (k, s["avg"])
-            else:
-                lines.append(f"{k}점 신호 없음")
-        now = summarize(r["buys"][(cur, False)]["rets"])
-        if now:
-            lines.append(f"참고: {cur}점 바로 매수 시 승률{now['win']:.0f}% 평균{now['avg']:+.1f}%")
-        msgs += base.chunk(lines)
+    msgs = pack([
+        "📊 2년 모의투자 결과",
+        "알림이 올 때마다 100만원어치 샀다고 치고 지난 2년을 다시 돌려 봤어요.",
+        f"· 안전 매수가에 사서 손절가·안전 매도가·{HOLD_DAYS}일 중 먼저 오는 때 팜",
+        f"· 수수료 {FEE * 100:.1f}% 포함 · 지금 알림 기준 {cur}점",
+    ])
 
-    lines = [f"🔵 매도 신호 정확도 ({SELL_CHECK_DAYS}일 뒤 실제로 내렸나)"]
+    verdicts = []
+    for market, r in results.items():
+        name = rt.MARKET_NAME[market]
+        rows, hold_total, n_hold = market_result(r)
+        lines = [f"{name} 2년 모의투자", f"종목마다 100만원씩 ({n_hold}종목 = {won(UNIT * n_hold, False)})"]
+        now = rows.get(cur)
+        if now:
+            lines += [f"① 알림({cur}점)대로 사고팔기",
+                      f"거래 {now['n']}번 · 이김 {now['win']} · 짐 {now['n'] - now['win']}",
+                      f"👉 {won(now['total'])}"]
+        else:
+            lines += [f"① 알림({cur}점)대로: 2년간 체결된 매수 없음"]
+        if hold_total is not None:
+            lines += ["② 처음에 사서 그냥 들고 있기", f"👉 {won(hold_total)}"]
+        msgs += pack(lines)
+
+        if rows:
+            biggest = max(abs(x["total"]) for x in rows.values())
+            lines = [f"{name} 알림 기준별 2년 손익"]
+            for k in THRESHOLDS:
+                if k in rows:
+                    x = rows[k]
+                    mark = " ← 지금" if k == cur else ""
+                    lines.append(f"{k}점 {bar(x['total'], biggest)} {won(x['total'])} ({x['n']}번){mark}")
+                else:
+                    lines.append(f"{k}점 거래 없음")
+            msgs += pack(lines)
+        verdicts.append(verdict(name, rows, hold_total, cur))
+
+    lines = [f"🔵 매도 알림 맞았나? ({SELL_CHECK_DAYS}일 뒤 실제로 내렸는지)"]
     for market, r in results.items():
         x = np.array(r["sells"].get(cur, []))
+        name = rt.MARKET_NAME[market]
         if len(x):
-            lines.append(f"{rt.MARKET_NAME[market]} {len(x)}회 · 하락 {(x < 0).mean() * 100:.0f}% · 평균 {x.mean() * 100:+.1f}%")
+            hit = round((x < 0).mean() * 10)
+            lines.append(f"{name} 10번 중 {hit}번 맞음 ({len(x)}번 중)")
         else:
-            lines.append(f"{rt.MARKET_NAME[market]} {cur}점 이상 신호 없음")
-    msgs += base.chunk(lines)
+            lines.append(f"{name} {cur}점 이상 매도 알림 없음")
+    lines.append("5번이면 동전 던지기 수준이에요")
+    msgs += pack(lines)
 
-    lines = ["🧭 정리 (15회 이상 나온 기준 중 평균이 가장 좋은 것)"]
-    for market in results:
-        if market in best and best[market][1] > 0:
-            k, avg = best[market]
-            mark = "← 지금과 같음" if k == cur else f"(지금 {cur}점)"
-            lines.append(f"{rt.MARKET_NAME[market]}: {k}점 평균{avg:+.1f}% {mark}")
-        elif market in best:
-            lines.append(f"{rt.MARKET_NAME[market]}: 모든 기준이 평균 손실 → 매수 알림 신뢰 낮음")
-        else:
-            lines.append(f"{rt.MARKET_NAME[market]}: 표본 부족 (판단 보류)")
-    lines.append("과거 성적은 미래 수익을 보장하지 않아요")
-    msgs += base.chunk(lines)
+    losing = all(r.get(cur) is None or r[cur]["total"] <= 0 for r in (market_result(x)[0] for x in results.values()))
+    tail = ["👉 지금은 알림을 참고용으로만 보는 걸 추천"] if losing else []
+    msgs += pack(["🧭 결론"] + verdicts + tail + ["과거 성적이 미래 수익을 보장하진 않아요"])
     return msgs
+
+
+def verdict(name, rows, hold_total, cur):
+    """시장마다 두세 줄로 결론: 알림 vs 그냥 보유, 그리고 더 나은 기준이 있는지"""
+    now = rows.get(cur)
+    if not now:
+        return f"{name}: 거래가 없어 판단 보류"
+    total = now["total"]
+    if hold_total is None:
+        line = f"{name}: 알림 {won(total)}"
+    else:
+        line = f"{name}: 알림 {won(total)} vs 보유 {won(hold_total)}"
+    if total > 0 and (hold_total is None or total >= hold_total):
+        line += "\n → 알림대로 한 게 더 나음 ✅"
+    elif total > 0:
+        line += "\n → 벌긴 했지만 그냥 보유가 더 나음"
+    elif hold_total is not None and hold_total < total:
+        line += "\n → 둘 다 손해, 알림이 덜 잃음"
+    else:
+        line += "\n → 알림대로 하면 손해, 보유가 나음"
+
+    good = {k: x for k, x in rows.items() if x["n"] >= 15}
+    best = max(good, key=lambda q: good[q]["total"]) if good else None
+    if best is not None and best != cur and good[best]["total"] > max(total, 0):
+        line += f"\n → {best}점으로 바꾸면 {won(good[best]['total'])} ({good[best]['n']}번)"
+    else:
+        lucky = [k for k, x in rows.items() if x["n"] < 15 and x["total"] > max(total, 0)]
+        if lucky:
+            k = max(lucky, key=lambda q: rows[q]["total"])
+            line += f"\n → {k}점은 {won(rows[k]['total'])}인데 {rows[k]['n']}번뿐이라 아직 몰라요"
+    return line
 
 
 if __name__ == "__main__":
