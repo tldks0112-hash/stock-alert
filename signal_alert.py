@@ -39,7 +39,10 @@ BUDGET_PER_STOCK_USD = SETTINGS.get("종목당_달러", 100)
 RULE = dict(ma_s=20, ma_l=50, rsi_buy=70, rsi_sell=80, trend=True, sl=0.07)
 RULE.update(SETTINGS.get("아침_규칙", {}))
 ONLY_WHEN_SIGNAL = SETTINGS.get("신호_있는_날만", False)
-LINK_URL = "https://tossinvest.com"   # 카톡 버튼을 누르면 열리는 주소
+# 카톡 아래 버튼: 누르면 '점검 작업'(2년 가상 시뮬레이션) 실행 화면이 열려요. 저장소 주소는 GitHub가 자동으로 알려줌
+_REPO = os.environ.get("GITHUB_REPOSITORY", "")
+LINK_URL = f"https://github.com/{_REPO}/actions/workflows/verify.yml" if _REPO else "https://github.com"
+BUTTON_TITLE = "가상 시뮬레이션"        # 카카오 권장: 8자 이하
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -180,19 +183,17 @@ def get_access_token():
 
 
 def send_kakao(access_token, text):
-    """버튼 없이 보내 봄. 카카오가 버튼 없는 형식을 거절하면 작은 '확인' 버튼으로 다시 보냄"""
     template = {"object_type": "text", "text": text,
-                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}
-    r = None
-    for extra in ({"buttons": []}, {"button_title": "확인"}):
-        r = requests.post(KAKAO_SEND_URL, timeout=10,
-                          headers={"Authorization": f"Bearer {access_token}"},
-                          data={"template_object": json.dumps({**template, **extra}, ensure_ascii=False)})
-        try:
-            if r.status_code == 200 and r.json().get("result_code") == 0:
-                return
-        except ValueError:
-            pass
+                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL},
+                "button_title": BUTTON_TITLE}
+    r = requests.post(KAKAO_SEND_URL, timeout=10,
+                      headers={"Authorization": f"Bearer {access_token}"},
+                      data={"template_object": json.dumps(template, ensure_ascii=False)})
+    try:
+        if r.status_code == 200 and r.json().get("result_code") == 0:
+            return
+    except ValueError:
+        pass
     raise RuntimeError(f"카톡 보내기 실패 {r.status_code}: {r.text[:300]}")
 
 
