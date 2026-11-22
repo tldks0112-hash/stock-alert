@@ -84,9 +84,9 @@ def build_lines():
             stop = s["close"] * (1 - RULE["sl"])
             qty = int(BUDGET_PER_STOCK_USD // s["close"])
             how = f"{qty}주" if qty >= 1 else f"${BUDGET_PER_STOCK_USD}어치 소수점"
-            buys.append(f"🟢 {t} 매수 ${s['close']:.2f} · {how}\n   손절가 ${stop:.2f}")
+            buys.append(f"🔴 {t} 매수 ${s['close']:.2f} · {how}\n   손절가 ${stop:.2f}")
         elif s["sell"]:
-            sells.append(f"🔴 {t} 매도 ${s['close']:.2f} (보유 중이면)")
+            sells.append(f"🔵 {t} 매도 ${s['close']:.2f} (보유 중이면)")
         else:
             waits.append(t)
 
