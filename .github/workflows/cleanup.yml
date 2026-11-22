@@ -1,0 +1,25 @@
+name: 기록 정리 (공개 전 1번)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 지난 실행 기록 모두 지우기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" \
+                 --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | .id")
+          n=0
+          for id in $ids; do
+            if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" > /dev/null 2>&1; then
+              n=$((n + 1))
+            fi
+          done
+          echo "지운 기록: ${n}개"
