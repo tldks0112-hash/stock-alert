@@ -94,6 +94,29 @@ def delete_sub(endpoint):
     _check(requests.delete(f"{URL}/rest/v1/subs?endpoint=eq.{q}", timeout=15, headers=_headers()))
 
 
+MISS_OF = {"시장": "시장약세", "추세": "추세약세", "눌림": "이미오름", "변동성": "변동큼", "실적": "실적임박"}
+LEGACY_SCORE = 6                      # 예전 설정(등급만 고르던 때)을 쓰는 사람은 신호 점수 6점 이상만
+
+
+def passes(alert, rule):
+    """매수 알림이 사용자가 켠 조건(rule)을 모두 통과하나. rule: {"score": 6, "need": ["시장", ...], "card": bool}"""
+    if int(alert.get("score") or 0) < int(rule.get("score", LEGACY_SCORE)):
+        return False
+    if alert["side"] != "buy":
+        return True
+    flags = alert.get("flags")
+    misses = alert.get("misses") or []
+    for g in rule.get("need") or []:
+        ok = flags.get(g, True) if isinstance(flags, dict) else MISS_OF.get(g) not in misses
+        if not ok:
+            return False
+    if rule.get("card"):
+        ok = flags.get("성적", False) if isinstance(flags, dict) else not ({"과거손실", "기록부족"} & set(misses))
+        if not ok:
+            return False
+    return True
+
+
 def wants(prefs, alert, now):
     """이 사용자가 이 알림을 받고 싶어 하나 (앱 '알림 설정' 그대로)"""
     p = {**DEFAULT_PREFS, **(prefs or {})}
@@ -101,10 +124,17 @@ def wants(prefs, alert, now):
         return False
     if alert["side"] == "sell" and not p["sell"]:
         return False
-    if alert["side"] == "buy":
-        need = GRADE_RANK.get(p["minGrade"], 1)
-        if GRADE_RANK.get(alert.get("grade") or "높음", 2) < need:
+    rule = (p.get("rules") or {}).get(alert["market"])
+    if rule:                                                  # 새 설정: 지표 켜고 끄기 / 추천 설정
+        if not passes(alert, rule):
             return False
+    else:                                                     # 예전 설정: 안정성 등급만
+        if int(alert.get("score") or 0) < LEGACY_SCORE:
+            return False
+        if alert["side"] == "buy":
+            need = GRADE_RANK.get(p["minGrade"], 1)
+            if GRADE_RANK.get(alert.get("grade") or "높음", 2) < need:
+                return False
     if p["quiet"] and now.astimezone(KST).hour < 7:          # 방해 금지: 밤 12시 ~ 아침 7시
         return False
     return True

@@ -72,6 +72,7 @@ MARKETS = {"kr": KR_STOCKS, "us": US_STOCKS, "crypto": COINS}          # 카톡�
 MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙 코인"}
 KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요약만, 자세한 기준가는 앱에서 / False: 예전처럼 종목별 자세히
 APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
+APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
 INDEX = {"kr": "069500.KS", "us": "SPY", "crypto": "BTC-KRW"}           # 시장 필터에 쓰는 대표 지수
@@ -938,26 +939,36 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         found = True
         checks = safety_checks(side, d, h, m, trig, lv, prev_close)
         score = sum(bool(ok) for _, ok in checks)
-        key = f"tajum|{hid(t)}|{side}"
+        key = f"tajum|{hid(t)}|{side}"          # 카톡 (시안님 설정)
+        akey = f"app|{hid(t)}|{side}"           # 앱 (사용자마다 설정이 달라서 후보를 넓게 저장)
         word = "매수" if side == "buy" else "매도"
-        stab, blocked = None, []
+        stab, blocked, hard, flags = None, [], [], None
         if side == "buy":
-            stab = stability(market, guard_flags(d, lv["price"], mkt_ok, earn_ok), card_ok, card_why, paused)
+            gf = guard_flags(d, lv["price"], mkt_ok, earn_ok)
+            flags = {**gf, "성적": bool(card_ok)}
+            stab = stability(market, gf, card_ok, card_why, paused)
             if GRADE_RANK[stab[0]] < GRADE_RANK[MIN_GRADE]:
                 blocked.append(f"안정성 {stab[0]} (설정한 최소 {MIN_GRADE})")
             if position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
-                blocked.append("손절폭이 손실 한도보다 큼")
+                hard.append("손절폭이 손실 한도보다 큼")
         once = side == "buy" and guard_on(market, "하루_한번")
+        to_kakao, to_app_ = False, False
         if in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
         elif score < min_score(market):
-            log(f"{t}: {word} 타점 있지만 신호 점수 {score}/10 → 알림 안 함")
-        elif blocked:
-            log(f"{t}: {word} 타점 {score}/10 이지만 막음 ({', '.join(blocked)})")
+            log(f"{t}: {word} 타점 있지만 신호 점수 {score}/10 → 카톡 안 함")
+        elif blocked or hard:
+            log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(blocked + hard)})")
         else:
-            alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
+            to_kakao = True
+        if app_bridge.enabled() and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once):
+            to_app_ = True
+        if to_kakao or to_app_:
+            alerts.append({"key": key, "akey": akey, "kakao": to_kakao, "app": to_app_,
+                           "market": market, "category": category[t], "name": names[t],
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
                            "grade": stab[0] if stab else None, "score": score, "stab": stab, "hist": hist,
+                           "flags": flags,
                            "why": f"{trig['time'].astimezone(KST):%H:%M} " + trig["reasons"][0]
                                   + (" 외" if len(trig["reasons"]) > 1 else ""),
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
@@ -974,7 +985,8 @@ def app_item(a):
     names = {a["ticker"]: a["name"]}
     title = label(market, a["ticker"], names)
     row = {"market": market, "category": a["category"], "name": title, "side": a["side"],
-           "score": int(a["score"]), "reason": a["why"], "price": float(lv["price"])}
+           "score": int(a["score"]), "reason": a["why"], "price": float(lv["price"]),
+           "flags": a.get("flags")}
     if a["side"] == "buy":
         grade, passed, total, misses = a["stab"]
         qty, loss = position(market, lv["buy"], lv["stop"])
@@ -1064,7 +1076,7 @@ def main():
     book["open"] = [tr for tr in book["open"] if tr["ta"] >= old]
     notices += weekly_report(book, now)
 
-    if alerts or notices:
+    if any(a["kakao"] for a in alerts) or notices:
         token = base.get_access_token()
         for msg in notices:
             base.send_kakao(token, msg)
@@ -1072,7 +1084,8 @@ def main():
         ordered = []
         for market, cats in MARKETS.items():
             order = {c: i for i, c in enumerate(cats)}
-            ordered += sorted((a for a in alerts if a["market"] == market), key=lambda a: order[a["category"]])
+            ordered += sorted((a for a in alerts if a["market"] == market and a["kakao"]),
+                              key=lambda a: order[a["category"]])
         if KAKAO_SHORT and ordered:
             for msg in short_messages(ordered, now):
                 send_short(token, msg)
@@ -1093,9 +1106,13 @@ def main():
                 if a["side"] == "buy":
                     track_start(book, market, a["ticker"], a["lv"], a["bar"], now, a.get("grade") or "높음")
                 log(f"알림 보냄 → {a['key']}")
+    app_items = [a for a in alerts if a["app"]]
+    app = to_app(app_items, book, now)
+    if app and not app.get("error"):
+        for a in app_items:                       # 앱에 저장된 것만 '보냄'으로 기록 (실패하면 다음에 다시)
+            state[a["akey"]] = now.isoformat()
     save_state(state, now)
     save_book(book, now)
-    app = to_app(alerts, book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""
     if app:
