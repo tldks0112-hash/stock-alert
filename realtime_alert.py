@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+import app_bridge
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
 # ======================= 설정 =======================
@@ -928,11 +929,73 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         else:
             alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
-                           "grade": stab[0] if stab else None,
+                           "grade": stab[0] if stab else None, "score": score, "stab": stab, "hist": hist,
+                           "why": f"{trig['time'].astimezone(KST):%H:%M} " + trig["reasons"][0]
+                                  + (" 외" if len(trig["reasons"]) > 1 else ""),
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
                                                 hist, stab)})
     if not found:
         log(f"{t}: 확정된 타점 없음")
+
+
+# ---------- 앱으로 보내기 ----------
+
+def app_item(a):
+    """카톡 알림 하나 → (앱 DB에 저장할 행, 휴대폰 푸시 내용)"""
+    market, lv = a["market"], a["lv"]
+    names = {a["ticker"]: a["name"]}
+    title = label(market, a["ticker"], names)
+    row = {"market": market, "category": a["category"], "name": title, "side": a["side"],
+           "score": int(a["score"]), "reason": a["why"], "price": float(lv["price"])}
+    if a["side"] == "buy":
+        grade, passed, total, misses = a["stab"]
+        qty, loss = position(market, lv["buy"], lv["stop"])
+        row.update(grade=grade, passed=passed, total=total, misses=misses, buy=float(lv["buy"]),
+                   stop=float(lv["stop"]), sell=float(lv["sell"]), qty=qty, loss=round(float(loss), 4),
+                   trail=float(tick_round(market, TRAIL_ATR * lv["atr"])), half=guard_on(market, "반_매도"),
+                   hist=a.get("hist"))
+        push = {"title": f"🔴 매수 · {title}",
+                "body": f"안정성 {grade} {passed}/{total} · 매수 {money(market, lv['buy'])} · 손절 {money(market, lv['stop'])}"}
+    else:
+        near = lv.get("res_near")
+        row.update(rebound=float(near) if near else None)
+        push = {"title": f"🔵 매도 · {title}",
+                "body": f"현재가 {money(market, lv['price'])}" + (f" · 반등 시 {money(market, near)}" if near else " · 보유 중이면 매도")}
+    return row, push
+
+
+def live_stats(book, now):
+    """앱 '실전 기록' 화면용: 지난 7일·전체를 시장·등급별로"""
+    since = pd.Timestamp(now) - pd.Timedelta(days=7)
+    out = {"week": {}, "all": {}, "from": None}
+    for c in book["closed"]:
+        out["from"] = min(out["from"] or c["tx"].isoformat(), c["tx"].isoformat())
+        for span in ("week", "all"):
+            if span == "week" and c["tx"] < since:
+                continue
+            g = out[span].setdefault(c["m"], {}).setdefault(c.get("gr", "높음"), {"n": 0, "win": 0, "sum": 0.0})
+            g["n"] += 1
+            g["win"] += int(c["ret"] > 0)
+            g["sum"] = round(g["sum"] + c["ret"] * 100, 2)           # 100만원씩이면 만원 단위
+    out["held"] = sum(tr["st"] in ("p1", "p2") for tr in book["open"])
+    out["waiting"] = sum(tr["st"] == "wait" for tr in book["open"])
+    out["paused"] = [mk for mk in MARKETS if guard_on(mk, "자동_멈춤")
+                     and pause_until(green(book, mk), pd.Timestamp(now))]
+    return out
+
+
+def to_app(alerts, book, now):
+    """앱 DB 저장 + 푸시 + 엔진 상태. 실패해도 카톡 알림에는 영향 없음"""
+    if not app_bridge.enabled():
+        return None
+    try:
+        res = app_bridge.publish([app_item(a) for a in alerts], now)
+        app_bridge.put_kv("heartbeat", {"at": now.isoformat()})
+        app_bridge.put_kv("live", live_stats(book, now))
+        return res
+    except Exception as e:
+        log(f"앱 연결 실패 ({e})")
+        return {"error": True}
 
 
 def main():
@@ -983,8 +1046,12 @@ def main():
                 time.sleep(1)
     save_state(state, now)
     save_book(book, now)
+    app = to_app(alerts, book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
-    print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개")
+    tail = ""
+    if app:
+        tail = " · 앱 연결 실패" if app.get("error") else f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건"
+    print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}")
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 
+import app_bridge
 import realtime_alert as rt
 import signal_alert as base
 
@@ -376,6 +377,13 @@ def main():
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write('<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>.</title>')
 
+    if app_bridge.enabled():                                      # 앱 '성적표' 화면용
+        try:
+            app_bridge.put_kv("sim", sim_summary(results, made))
+        except Exception as e:
+            if rt.VERBOSE or preview:
+                print(f"앱 저장 실패 ({e})")
+
     full = base.SETTINGS.get("점검_카톡_전체", True)                 # false면 카톡엔 요약만
     messages = build_messages(results) if full else build_short(results)
     if preview:
@@ -542,6 +550,33 @@ def grade_verdict(r):
     g = st["높음"]
     green = f"🟢만 {won(g['total'])}({g['n']}번)" if g else "🟢 거래 없음"
     return f"\n → {green} · 전부 {won(sum(allx) * UNIT)}({len(allx)}번)"
+
+
+def sim_summary(results, made):
+    """앱 성적표용 요약 (종목 이름 없이 시장별 숫자만)"""
+    out = {"made": made.isoformat(), "fee": FEE, "markets": []}
+    for market, r in results.items():
+        rows, hold_total, n_hold = market_result(r)
+        cur, live = r["cur"], r["live"]
+        new, old = rows.get((live, cur)), rows.get(("①", cur))
+        trades = r["live_trades"]
+        span = r["span"]
+        halves = None
+        if trades and span[0] is not None:
+            mid = span[0] + (span[1] - span[0]) / 2
+            halves = [round(sum(x["ret"] for x in trades if x["ta"] < mid) * UNIT, 1),
+                      round(sum(x["ret"] for x in trades if x["ta"] >= mid) * UNIT, 1)]
+        sells = np.array(r["sells"])
+        pack_row = lambda x: {"total": round(float(x["total"]), 1), "n": x["n"], "win": x["win"]} if x else None
+        out["markets"].append({
+            "market": market, "tickers": n_hold, "cur": cur,
+            "new": pack_row(new), "old": pack_row(old),
+            "hold": round(float(hold_total), 1) if hold_total is not None else None,
+            "halves": halves,
+            "grades": {g: pack_row(x) for g, x in grade_stats(r).items()},
+            "sell": {"hits": round(float((sells < 0).mean()) * 10, 1), "n": int(len(sells))} if len(sells) else None,
+        })
+    return out
 
 
 def all_verdicts(results):
