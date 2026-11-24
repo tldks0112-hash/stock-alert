@@ -1,0 +1,50 @@
+name: 앱 배포
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["app/**"]
+
+permissions:
+  contents: read
+  pages: write        # 앱을 GitHub Pages에 올리기
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 앱 연결 설정 만들기
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          cfg = {"supabaseUrl": os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
+                 "supabaseKey": os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip(),
+                 "vapidPublicKey": os.environ.get("VAPID_PUBLIC_KEY", "").strip()}
+          with open("app/config.js", "w") as f:
+              f.write("window.APP_CONFIG = " + json.dumps(cfg) + ";\n")
+          print("연결 설정:", {k: "있음" if v else "없음" for k, v in cfg.items()})
+          PY
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app
+          retention-days: 1
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
