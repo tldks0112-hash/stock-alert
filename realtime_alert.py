@@ -988,14 +988,27 @@ def to_app(alerts, book, now):
     """앱 DB 저장 + 푸시 + 엔진 상태. 실패해도 카톡 알림에는 영향 없음"""
     if not app_bridge.enabled():
         return None
+    problem = app_bridge.setup_problem()
+    if problem:
+        return {"error": problem}
+    items, bad = [], 0
+    for a in alerts:
+        try:
+            items.append(app_item(a))
+        except Exception:
+            bad += 1                              # 알림 하나가 이상해도 나머지는 보냄
+    step = "알림 저장"
     try:
-        res = app_bridge.publish([app_item(a) for a in alerts], now)
+        res = app_bridge.publish(items, now)
+        step = "상태 저장"
         app_bridge.put_kv("heartbeat", {"at": now.isoformat()})
+        step = "기록 저장"
         app_bridge.put_kv("live", live_stats(book, now))
+        if bad:
+            res["bad"] = bad
         return res
     except Exception as e:
-        log(f"앱 연결 실패 ({e})")
-        return {"error": True}
+        return {"error": f"{step}: {app_bridge.why(e)}"}
 
 
 def main():
@@ -1050,7 +1063,10 @@ def main():
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""
     if app:
-        tail = " · 앱 연결 실패" if app.get("error") else f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건"
+        if app.get("error"):
+            tail = f" · 앱 연결 실패 ({app['error']})"
+        else:
+            tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
     print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}")
 
 

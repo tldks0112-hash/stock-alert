@@ -5,15 +5,21 @@
 
 import json
 import os
+import re
 import urllib.parse
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import requests
 
-URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-KEY = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-VAPID_PRIVATE = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+def _clean(v):
+    """복사·붙여넣기 때 끼어든 줄바꿈·띄어쓰기·한글 같은 글자를 빼요 (주소와 키에는 원래 없는 글자)"""
+    return re.sub(r"[^\x21-\x7e]", "", v or "")
+
+
+URL = _clean(os.environ.get("SUPABASE_URL")).rstrip("/")
+KEY = _clean(os.environ.get("SUPABASE_SECRET_KEY"))
+VAPID_PRIVATE = _clean(os.environ.get("VAPID_PRIVATE_KEY"))
 KST = ZoneInfo("Asia/Seoul")
 GRADE_RANK = {"낮음": 0, "보통": 1, "높음": 2}
 DEFAULT_PREFS = {"markets": ["kr", "us", "crypto"], "minGrade": "보통", "sell": True, "quiet": False}
@@ -21,6 +27,32 @@ DEFAULT_PREFS = {"markets": ["kr", "us", "crypto"], "minGrade": "보통", "sell"
 
 def enabled():
     return bool(URL and KEY)
+
+
+def setup_problem():
+    """비밀값 모양이 이상하면 이유를 짧게 (값 자체는 절대 찍지 않음)"""
+    if not re.fullmatch(r"https://[a-z0-9]+\.supabase\.co", URL):
+        return "SUPABASE_URL 모양이 이상해요"
+    if KEY.startswith("sb_publishable_"):
+        return "SUPABASE_SECRET_KEY에 공개 키(publishable)가 들어 있어요"
+    if not (KEY.startswith("sb_secret_") or KEY.startswith("eyJ")):
+        return "SUPABASE_SECRET_KEY 모양이 이상해요"
+    return ""
+
+
+def why(e):
+    """실패 이유를 공개 기록에 남겨도 안전한 말로"""
+    if isinstance(e, RuntimeError) and str(e).startswith("앱 DB 오류"):
+        code = str(e).split()[-1]
+        hint = {"401": "키가 틀렸어요", "403": "권한이 없어요", "404": "표나 주소가 없어요"}.get(code, "")
+        return f"서버 응답 {code}" + (f", {hint}" if hint else "")
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "서버에 접속하지 못했어요"
+    if isinstance(e, (requests.exceptions.MissingSchema, requests.exceptions.InvalidURL)):
+        return "SUPABASE_URL 모양이 이상해요"
+    if isinstance(e, (requests.exceptions.InvalidHeader, UnicodeError)):
+        return "SUPABASE_SECRET_KEY에 이상한 글자가 있어요"
+    return type(e).__name__
 
 
 def _headers(extra=None):
