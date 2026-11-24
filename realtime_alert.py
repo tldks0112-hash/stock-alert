@@ -1,4 +1,4 @@
-# 실시간 '안전 타점' 알림 — 미국 주식 · 국내 주식 · 코인
+# 실시간 타점 알림 — 미국 주식 · 국내 주식 · 코인
 # GitHub Actions가 장중엔 15분마다, 그 밖의 시간(코인)엔 30분마다 실행해요.
 #
 # 하는 일
@@ -588,17 +588,17 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
     if side == "buy":
         grade, passed, total, misses = stab or ("높음", 0, 0, [])
         lines = [f"🔴 매수 · {label(market, ticker, names)}", where,
-                 f"안전도 {score}/10 · 안정성 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
+                 f"신호 점수 {score}/10 · 안정성 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
         gap = (p / lv["buy"] - 1) * 100
         qty, loss = position(market, lv["buy"], lv["stop"])
-        lines += [f"🔴 안전 매수가 {money(market, lv['buy'])} · {qty}" + (f" ({gap:.1f}% 위 대기)" if gap > 1 else " (지금 가능)"),
+        lines += [f"🔴 매수 기준가 {money(market, lv['buy'])} · {qty}" + (f" ({gap:.1f}% 위 대기)" if gap > 1 else " (지금 가능)"),
                   f"⛔ 손절가 {money(market, lv['stop'])}" + (f" → -{money(market, loss)}" if loss > 0 else "")]
         if guard_on(market, "반_매도"):
             trail = money(market, tick_round(market, TRAIL_ATR * lv["atr"]))
             lines += [f"🔵 {money(market, lv['sell'])}에서 절반 매도, ⛔→매수가",
                       f"나머지는 고점-{trail}에 매도"]
         else:
-            lines += [f"🔵 안전 매도가 {money(market, lv['sell'])} (손익비 {lv['rr']:.1f})"]
+            lines += [f"🔵 매도 기준가 {money(market, lv['sell'])} (손익비 {lv['rr']:.1f})"]
         if misses:
             optional.append("⚠️ " + "·".join(misses))
         if hist:
@@ -637,7 +637,7 @@ def summary_messages(market, items, now):
             word = "🔴 매수" if a["side"] == "buy" else "🔵 매도"
             dot = f" {GRADE_ICON[a['grade']]}" if a.get("grade") else ""
             lines.append(f"{word} {a['name']} {money(market, a['price'])}{dot}")
-    lines.append("👇 종목별 안전가는 다음 메시지")
+    lines.append("👇 종목별 기준가는 다음 메시지")
     return base.chunk(lines)
 
 
@@ -812,7 +812,7 @@ def weekly_report(book, now):
     book["flags"]["report"] = week
     since = pd.Timestamp(now) - pd.Timedelta(days=7)
     lines = [f"📒 지난주 실전 알림 성적 ({k - timedelta(days=7):%m/%d}~{k - timedelta(days=1):%m/%d})",
-             "알림대로 100만원씩 안전 매수가에 샀다고 치고 계산"]
+             "알림대로 100만원씩 매수 기준가에 샀다고 치고 계산"]
     for market, cats in MARKETS.items():
         if not cats:
             continue
@@ -923,7 +923,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         if in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
         elif score < min_score(market):
-            log(f"{t}: {word} 타점 있지만 안전도 {score}/10 → 알림 안 함")
+            log(f"{t}: {word} 타점 있지만 신호 점수 {score}/10 → 알림 안 함")
         elif blocked:
             log(f"{t}: {word} 타점 {score}/10 이지만 막음 ({', '.join(blocked)})")
         else:

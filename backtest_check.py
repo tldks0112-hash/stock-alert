@@ -689,7 +689,7 @@ def market_section(market, r):
                    f'<td>{x["win"] / x["n"] * 100:.0f}%</td><td>{x["n"]}번</td></tr>')
     out.append("</table>")
 
-    out.append('<h3>⭐ 새 알림 안전도 기준별</h3><table><tr><th>기준</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
+    out.append('<h3>⭐ 새 알림 신호 점수 기준별</h3><table><tr><th>기준</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
     for k in r["ks"]:
         x = rows.get((live, k))
         mark = " ← 지금" if k == cur else ""
@@ -753,14 +753,14 @@ ul.st{{margin:0;padding-left:18px;font-size:13px}}
 footer{{color:var(--mut);font-size:12px;padding:8px 4px 30px}}
 </style></head><body><main>
 <header><h1>📊 2년 가상 시뮬레이션</h1>
-<p>{made:%Y-%m-%d %H:%M} 기준 · 알림이 올 때마다 100만원씩 안전 매수가에 샀다고 치고 지난 2년을 다시 돌려 봤어요.
+<p>{made:%Y-%m-%d %H:%M} 기준 · 알림이 올 때마다 100만원씩 매수 기준가에 샀다고 치고 지난 2년을 다시 돌려 봤어요.
 수수료 {FEE * 100:.1f}% 포함 · 수익은 빨강, 손실은 파랑</p></header>
 {body}
 <section><h2>🔵 매도 알림이 맞았나?</h2><p class="mut" style="margin:0 0 6px;font-size:13px">
 매도 알림 {SELL_CHECK_DAYS}일 뒤 실제로 내렸는지 · 10번 중 5번이면 동전 던지기 수준</p>
 <table>{"".join(sells)}</table></section>
 <section><h2>방법 설명</h2><ul class="st">
-<li>① 예전 알림: 손실 방지 장치 없이 안전도만 보고 알림</li>
+<li>① 예전 알림: 손실 방지 장치 없이 신호 점수만 보고 알림</li>
 <li>② 시장필터 ③ 추세필수 ④ 눌림매수 ⑤ 반매도: 장치를 하나씩만 켠 경우</li>
 <li>⑥ 장치전부: ②~⑤ + 변동성·실적 발표 피하기·하루 한 번</li>
 <li>⑦ ⑥ + 성적표(과거 수익 난 종목만) + 연속 손실 자동 멈춤</li>
