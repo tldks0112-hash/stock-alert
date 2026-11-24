@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
 
       - name: 준비
-        run: pip install -q yfinance pandas requests
+        run: pip install -q yfinance pandas requests pywebpush
 
       - name: 기록 불러오기
         uses: actions/cache/restore@v4
@@ -50,6 +50,9 @@ jobs:
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
           NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
           FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
         run: python realtime_alert.py
 
       - name: 기록 저장
@@ -59,28 +62,4 @@ jobs:
           path: .alert_state
           key: alert-state-${{ github.run_id }}
 
-      - name: 토큰 저장
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
-        run: |
-          if [ -s "$TOKEN_FILE" ]; then
-            pip install -q pynacl
-            python - <<'PY'
-          import base64, os, requests
-          from nacl import encoding, public
-          repo, tok = os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"]
-          h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
-               "X-GitHub-Api-Version": "2022-11-28"}
-          k = requests.get(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=h, timeout=10).json()
-          box = public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder()))
-          value = open(os.environ["TOKEN_FILE"]).read().strip()
-          enc = base64.b64encode(box.encrypt(value.encode())).decode()
-          r = requests.put(f"https://api.github.com/repos/{repo}/actions/secrets/KAKAO_REFRESH_TOKEN",
-                           headers=h, json={"encrypted_value": enc, "key_id": k["key_id"]}, timeout=10)
-          r.raise_for_status()
-          print("토큰 저장 완료")
-          PY
-            rm -f "$TOKEN_FILE"
-          fi
+      - name:
