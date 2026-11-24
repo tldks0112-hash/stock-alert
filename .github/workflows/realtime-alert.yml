@@ -62,4 +62,16 @@ jobs:
           path: .alert_state
           key: alert-state-${{ github.run_id }}
 
-      - name:
+      - name: 토큰 저장
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+        run: |
+          if [ -s "$TOKEN_FILE" ]; then
+            gh secret set KAKAO_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"
+            rm -f "$TOKEN_FILE"
+            echo "토큰 저장 완료"
+          fi
+
+# ---- 파일 끝 ----
