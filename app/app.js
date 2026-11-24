@@ -10,8 +10,8 @@
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
   var GRADE_RANK = { '낮음': 0, '보통': 1, '높음': 2 };
-  var DEFAULT_PREFS = { markets: ['kr', 'us', 'crypto'], minGrade: '보통', sell: true, quiet: false, preset: '', rules: null };
-  // 매수 알림 조건: 안정성 지표 5가지 + 수익성 지표 1가지 + 신호 점수
+  var DEFAULT_PREFS = { markets: ['kr', 'us', 'crypto'], minGrade: '보통', sell: true, quiet: false, brief: true, preset: '', rules: null };
+  // 매수 알림 조건: 안전 점검 지표 5가지 + 과거 성적 1가지 + 신호 점수
   var GUARDS = [
     ['시장', '시장 흐름 좋을 때만', '대표 지수(코스피200·S&P500·비트코인)가 200일선 위일 때만'],
     ['추세', '상승 추세 종목만', '주가와 50일선이 200일선 위에 있을 때만'],
@@ -222,7 +222,7 @@
   }
   function ruleText(r, market) {
     var need = (r.need || []).filter(function (g) { return market === 'us' || g !== '실적'; });
-    return (need.length ? need.join('·') : '안정성 조건 없음') + (r.card ? ' · 과거 성적' : '') + ' · 신호 ' + r.score + '점 이상';
+    return (need.length ? need.join('·') : '점검 조건 없음') + (r.card ? ' · 과거 성적' : '') + ' · 신호 ' + r.score + '점 이상';
   }
   function statKey(p) { return p.rules ? JSON.stringify(p.rules) : ''; }
   function loadStats() {
@@ -307,8 +307,20 @@
       (off.length ? '<p class="small" style="margin:0">설정에서 끈 ' + off.join('·') + '은 빼고 계산했어요.</p>' : '') + '</section>';
   }
 
-    // ---------- 장 시간 (공휴일은 반영 안 함) ----------
+    // ---------- 장 시간 · 휴장일 ----------
+  // 미장: NYSE 공식 발표(2026·2027) / 국장: 2026년 남은 휴장일 + 2027년 관공서 공휴일 기준(거래소 공식 발표 전)
   var SESS = { kr: { tz: 'Asia/Seoul', open: 540, close: 930 }, us: { tz: 'America/New_York', open: 570, close: 960 } };
+  var HOLI = {
+    us: { '2026-11-26': '추수감사절', '2026-12-25': '크리스마스', '2027-01-01': '새해', '2027-01-18': '마틴 루서 킹 데이', '2027-02-15': '대통령의 날',
+      '2027-03-26': '성금요일', '2027-05-31': '메모리얼 데이', '2027-06-18': '준틴스', '2027-07-05': '독립기념일', '2027-09-06': '노동절',
+      '2027-11-25': '추수감사절', '2027-12-24': '크리스마스' },
+    kr: { '2026-12-25': '성탄절', '2026-12-31': '연말 휴장', '2027-01-01': '신정', '2027-02-08': '설 연휴', '2027-02-09': '설 대체휴일',
+      '2027-03-01': '삼일절', '2027-05-03': '노동절 대체휴일', '2027-05-05': '어린이날', '2027-05-13': '부처님오신날', '2027-07-19': '제헌절 대체휴일',
+      '2027-08-16': '광복절 대체휴일', '2027-09-14': '추석 연휴', '2027-09-15': '추석', '2027-09-16': '추석 연휴', '2027-10-04': '개천절 대체휴일',
+      '2027-10-11': '한글날 대체휴일', '2027-12-27': '성탄절 대체휴일', '2027-12-31': '연말 휴장' }
+  };
+  var EARLY = { us: { '2026-11-27': 780, '2026-12-24': 780, '2027-11-26': 780 } };   // 오후 1시 조기 마감
+  function ymd(y, m, d) { return y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d; }
   function tzParts(d, tz) {
     var o = {};
     new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -322,17 +334,20 @@
   }
   function marketHours(mk, now) {
     if (mk === 'crypto') return { open: true, text: '24시간' };
-    var ss = SESS[mk], p = tzParts(now, ss.tz);
-    var wd = new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();
-    if (wd > 0 && wd < 6 && p.min >= ss.open && p.min < ss.close)
-      return { open: true, text: hm(at(ss.tz, p.y, p.m, p.d, ss.close).toISOString()) + ' 마감' };
-    for (var i = 0; i < 8; i++) {
-      var dd = new Date(Date.UTC(p.y, p.m - 1, p.d + i)), w = dd.getUTCDay();
-      if (w === 0 || w === 6 || (i === 0 && p.min >= ss.open)) continue;
-      var t = at(ss.tz, dd.getUTCFullYear(), dd.getUTCMonth() + 1, dd.getUTCDate(), ss.open);
+    var ss = SESS[mk], p = tzParts(now, ss.tz), key = ymd(p.y, p.m, p.d);
+    var wd = new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay(), holi = HOLI[mk][key];
+    var close = (EARLY[mk] || {})[key] || ss.close;
+    if (wd > 0 && wd < 6 && !holi && p.min >= ss.open && p.min < close)
+      return { open: true, text: hm(at(ss.tz, p.y, p.m, p.d, close).toISOString()) + (close !== ss.close ? ' 조기 마감' : ' 마감') };
+    for (var i = 0; i < 12; i++) {
+      var dd = new Date(Date.UTC(p.y, p.m - 1, p.d + i)), w = dd.getUTCDay(), y = dd.getUTCFullYear(), m = dd.getUTCMonth() + 1, d = dd.getUTCDate();
+      if (w === 0 || w === 6 || HOLI[mk][ymd(y, m, d)] || (i === 0 && p.min >= ss.open)) continue;
+      var t = at(ss.tz, y, m, d, ss.open);
       var sameDay = kst(t, { day: 'numeric' }) === kst(now, { day: 'numeric' });
       var tomorrow = kst(t, { day: 'numeric' }) === kst(new Date(now.getTime() + 864e5), { day: 'numeric' });
-      return { open: false, text: (sameDay ? '' : tomorrow ? '내일 ' : kst(t, { weekday: 'short' }) + ' ') + hm(t.toISOString()) + ' 개장' };
+      var early = (EARLY[mk] || {})[ymd(y, m, d)];
+      return { open: false, holi: holi && wd > 0 && wd < 6 ? holi : '',
+        text: (holi && wd > 0 && wd < 6 ? '휴장(' + holi + ') · ' : '') + (sameDay ? '' : tomorrow ? '내일 ' : kst(t, { weekday: 'short' }) + ' ') + hm(t.toISOString()) + ' 개장' + (early ? ' · ' + hm(at(ss.tz, y, m, d, early).toISOString()) + ' 조기 마감' : '') };
     }
     return { open: false, text: '휴장' };
   }
@@ -359,8 +374,8 @@
     var rows = [];
     if (flow) rows.push('<div class="line"><span>시장 흐름</span><span>' + flow + '</span></div>');
     rows.push('<div class="line"><span>새 타점 (24시간)</span><b>매수 ' + (a.buy || 0) + ' · 매도 ' + (a.sell || 0) + '</b></div>');
-    if (c.n) rows.push('<div class="line"><span>끝난 알림 거래 (100만원씩)</span><b>' + c.n + '번 · 이익 ' + c.wins + ' · <span class="' + tone(c.sum) + '">' + manwon(c.sum) + '</span></b></div>');
-    rows.push('<div class="line"><span>보유 · 매수 대기</span><b>' + (b.held || 0) + ' · ' + (b.waiting || 0) + '</b></div>');
+    rows.push('<div class="line"><span>알림 실전 기록 <small class="small">100만원씩 가정</small></span><b>보유 ' + (b.held || 0) + ' · 대기 ' + (b.waiting || 0) +
+      (c.n ? ' · 끝남 ' + c.n + '번 <span class="' + tone(c.sum) + '">' + manwon(c.sum) + '</span>' : '') + '</b></div>');
     if (b.earn && b.earn.length) rows.push('<div class="line"><span>실적 예정</span><b style="text-align:right">' + b.earn.slice(0, 4).map(function (e) { return esc(e.name) + ' ' + e.day.slice(5).replace('-', '/'); }).join(', ') + '</b></div>');
     return '<section class="card brief"><div class="line"><h2 style="font-size:15px">☀️ 아침 브리핑</h2><span class="small">' + kst(d, { month: 'numeric', day: 'numeric' }).replace(/\.\s*/g, '/').replace(/\/$/, '') + '(' + wd + ') ' + hm(b.at) +
       ' <button class="x" data-act="briefhide" aria-label="오늘 브리핑 닫기">' + ICON.x + '</button></span></div>' +
@@ -401,10 +416,12 @@
       '<span style="text-align:right"><b class="' + tone(r * 100) + '">' + (r > 0 ? '+' : '') + (r * 100).toFixed(1) + '%</b><small class="' + tone(r) + '">' + amt(m, e.amount * r) + '</small></span>' +
       '<button class="x" data-act="jdel" data-v="' + esc(e.id) + '" aria-label="기록 지우기">' + (S.jdel === e.id ? '<small>지울까요?</small>' : ICON.x) + '</button></div>';
   }
+  var JBACKUP = '<section class="card"><div class="line"><h2 style="font-size:15px">백업</h2><span class="small">휴대폰을 바꾸거나 앱 데이터를 지우기 전에</span></div>' +
+    '<div class="two"><button class="btn ghost" data-act="jexport">내보내기</button><label class="btn ghost" style="cursor:pointer">가져오기<input type="file" accept="application/json,.json" data-imp hidden></label></div></section>';
   function journalSection() {
     var all = jr(), open = all.filter(function (e) { return !e.out; }), done = all.filter(function (e) { return e.out; }).sort(function (x, y) { return x.out.at < y.out.at ? 1 : -1; });
     var head = '<p class="foot-note" style="margin:0 4px">타점에서 <b>샀어요</b>를 누르면 여기에 적혀요. 판 다음 <b>팔았어요</b>를 누르면 손익·승률을 자동으로 계산해요. 기록은 이 휴대폰에만 저장돼요.</p>';
-    if (!all.length) return head + '<p class="empty">아직 기록이 없어요.<br>타점을 눌러 <b>샀어요 · 매매일지에 적기</b>를 눌러 보세요.</p>';
+    if (!all.length) return head + '<p class="empty">아직 기록이 없어요.<br>타점을 눌러 <b>샀어요 · 매매일지에 적기</b>를 눌러 보세요.</p>' + JBACKUP;
     var rets = done.map(jret), wins = rets.filter(function (r) { return r > 0; }).length;
     var sum = { kr: 0, us: 0 }; done.forEach(function (e) { sum[e.market === 'us' ? 'us' : 'kr'] += e.amount * jret(e); });
     var avg = rets.length ? rets.reduce(function (x, y) { return x + y; }, 0) / rets.length * 100 : null;
@@ -414,7 +431,31 @@
       (done.some(function (e) { return e.market === 'us'; }) ? '<div class="line"><span>달러 손익 합계</span><b class="' + tone(sum.us) + '">' + amt('us', sum.us) + '</b></div>' : '')
       : '<p class="small" style="margin:0">아직 판 거래가 없어요. 팔면 손익과 이긴 비율이 나와요.</p>') + '</section>';
     return head + summary + (open.length ? '<h3 class="sub-h" style="margin:6px 4px 0">보유 중 ' + open.length + '</h3>' + open.map(jRow).join('') : '') +
-      (done.length ? '<h3 class="sub-h" style="margin:6px 4px 0">끝난 거래</h3><section class="card" style="gap:0">' + done.map(jRow).join('') + '</section>' : '');
+      (done.length ? '<h3 class="sub-h" style="margin:6px 4px 0">끝난 거래</h3><section class="card" style="gap:0">' + done.map(jRow).join('') + '</section>' : '') + JBACKUP;
+  }
+  function jValid(e) {
+    return e && typeof e.id === 'string' && typeof e.name === 'string' && e.name.length <= 80 && ['kr', 'us', 'crypto'].indexOf(e.market) >= 0 &&
+      e.buy > 0 && e.amount > 0 && typeof e.at === 'string' && (!e.out || e.out.price > 0);
+  }
+  function jImport(file) {
+    if (!file || file.size > 1e6) { toast('파일을 확인해 주세요'); return; }
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        var d = JSON.parse(rd.result), items = Array.isArray(d) ? d : d.items;
+        if (!Array.isArray(items)) throw 0;
+        var list = jr(), have = {}, add = 0;
+        list.forEach(function (e) { have[e.id] = 1; });
+        items.forEach(function (e) {
+          if (!jValid(e) || have[e.id]) return;
+          list.push({ id: e.id, aid: e.aid, name: e.name, market: e.market, buy: +e.buy, amount: +e.amount, stop: e.stop, sell: e.sell, half: !!e.half, at: e.at,
+            out: e.out ? { price: +e.out.price, at: String(e.out.at || e.at) } : null });
+          have[e.id] = 1; add++;
+        });
+        jrSave(list); toast(add ? add + '건 가져왔어요' : '새로 가져올 기록이 없어요'); render();
+      } catch (_) { toast('타점노트 백업 파일이 아니에요'); }
+    };
+    rd.readAsText(file);
   }
   function journalBox(a) {              // 타점 상세 화면 아래
     var mine = jr().filter(function (e) { return e.aid === a.id; })[0], held = heldBy(a);
@@ -440,7 +481,7 @@
   function chip(a) {
     if (a.side !== 'buy') return '<span class="chip sell">매도 알림</span>';
     var g = a.grade || '높음';
-    return '<span class="chip g-' + g + '">안정성 ' + g + (a.total ? ' ' + a.passed + '/' + a.total : '') + '</span>';
+    return '<span class="chip g-' + g + '">점검 ' + g + (a.total ? ' ' + a.passed + '/' + a.total : '') + '</span>';
   }
   function where(a) { return MARKET[a.market] + (a.category ? ' › ' + a.category : '') + ' · ' + dayLabel(a.created_at) + ' ' + (a.reason || hm(a.created_at)); }
   function card(a) {
@@ -463,7 +504,7 @@
   function pageWelcome() {
     var all = S.agree.every(Boolean);
     return '<main class="welcome"><div style="display:flex;flex-direction:column;gap:14px"><div class="logo">' + ICON.logo + '</div>' +
-      '<h1>매수·매도 타점을<br>알림으로 받아 보세요</h1><p class="lead">국장·미장·코인에 타점이 생기면 매수 기준가, 손절가, 매도가와 안정성 등급을 함께 알려 드려요.</p>' +
+      '<h1>매수·매도 타점을<br>알림으로 받아 보세요</h1><p class="lead">국장·미장·코인에 타점이 생기면 매수 기준가, 손절가, 매도가와 안전 점검 결과를 함께 알려 드려요.</p>' +
       '<span class="tag" style="align-self:flex-start">무료 베타 · 결제 없음</span></div>' +
       '<section aria-labelledby="nt" style="display:flex;flex-direction:column;gap:12px"><h2 id="nt" style="margin:0;font-size:16px">시작 전에 꼭 확인해 주세요</h2>' +
       NOTICES.map(function (n, i) {
@@ -515,7 +556,7 @@
       '<span style="display:flex"><button class="icon-btn" data-act="refresh" aria-label="새로고침">' + ICON.refresh + '</button><a class="icon-btn" href="#/settings" aria-label="알림 설정">' + ICON.bell + '</a></span>',
       '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>' + hoursLine(pf)) +
       '<main class="page">' + (f && S.tab === 'all' && !S.error ? briefCard(f.brief) : '') + '<div class="row-head"><h1>최근 타점 <span>' + items.length + '건</span></h1><span class="small">' + esc(status) + '</span></div>' + body +
-      '<p class="foot-note">안정성은 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지로 매겨요. 최근 3일 알림만 보여요.</p></main>' + menu('home');
+      '<p class="foot-note">안전 점검은 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지예요. 최근 3일 알림만 보여요.</p></main>' + menu('home');
   }
   function ladder(a) {
     var m = a.market, pts = a.side === 'buy'
@@ -550,7 +591,7 @@
         '<ol class="steps">' + steps.map(function (s, i) { return '<li><i>' + (i + 1) + '</i><span>' + s + '</span></li>'; }).join('') + '</ol></section>');
       var miss = a.misses || [], passN = (a.total || 0) - miss.filter(function (x) { return x !== '🟢연속손실'; }).length;
       var hist = a.hist ? '<p class="info">과거 ' + (a.hist.src === '시장' ? '같은 시장 알림 전체' : '이 종목 알림') + '대로 샀다면 <b>' + a.hist.n + '번 · 승률 ' + Math.round(a.hist.win) + '% · 평균 ' + (a.hist.avg > 0 ? '+' : '') + Number(a.hist.avg).toFixed(1) + '%</b></p>' : '';
-      out.push('<section class="card"><div class="line"><h2>안정성</h2>' + chip(a) + '</div><ul class="checks">' +
+      out.push('<section class="card"><div class="line"><h2>안전 점검</h2>' + chip(a) + '</div><ul class="checks">' +
         miss.map(function (x) { return '<li>' + ICON.no + esc(MISS[x] || x) + '</li>'; }).join('') +
         (passN > 0 ? '<li>' + ICON.ok + (miss.length ? '나머지 ' + passN + '개 통과' : passN + '개 모두 통과') + '</li>' : '') + '</ul>' + hist +
         '<div class="line"><span>신호 점수 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
@@ -576,10 +617,10 @@
     var hasG = ['높음', '보통', '낮음'].some(function (k) { return g[k]; });
     var grades = !hasG ? '' : '<h2 style="font-size:14px;color:var(--mut);margin-top:4px">등급별 (알림 전부 따라 샀다면)</h2>' + ['높음', '보통', '낮음'].map(function (k) {
       var x = g[k];
-      return '<div class="grow"><span class="chip g-' + k + '">안정성 ' + k + '</span><span>' + (x ? x.n + '번 · 승률 ' + Math.round(x.win / x.n * 100) + '%' : '거래 없음') + '</span><strong class="' + tone(x && x.total) + '">' + (x ? manwon(x.total) : '-') + '</strong></div>';
+      return '<div class="grow"><span class="chip g-' + k + '">점검 ' + k + '</span><span>' + (x ? x.n + '번 · 승률 ' + Math.round(x.win / x.n * 100) + '%' : '거래 없음') + '</span><strong class="' + tone(x && x.total) + '">' + (x ? manwon(x.total) : '-') + '</strong></div>';
     }).join('');
     return '<section class="card"><div class="line"><h2>' + MARKET[mk.market] + '</h2><span class="small">' + mk.tickers + '종목 · 기준 ' + mk.cur + '점</span></div>' + bars +
-      '<div class="line" style="border-top:1px solid var(--chip);padding-top:10px"><span>안정성 검사 · 기간 앞 절반 / 뒤 절반</span><b>' + half + '</b></div>' +
+      '<div class="line" style="border-top:1px solid var(--chip);padding-top:10px"><span>기간 검사 · 앞 절반 / 뒤 절반</span><b>' + half + '</b></div>' +
       grades +
       (mk.sell ? '<div class="line"><span>매도 알림 적중률 (3일 뒤)</span><b>10번 중 ' + Math.round(mk.sell.hits) + '번</b></div>' : '') + '</section>';
   }
@@ -589,7 +630,7 @@
     var rows = keys.length ? keys.map(function (mk) {
       return '<section class="card"><h2>' + MARKET[mk] + '</h2>' + ['높음', '보통', '낮음'].filter(function (g) { return d[mk][g]; }).map(function (g) {
         var x = d[mk][g];
-        return '<div class="grow"><span class="chip g-' + g + '">안정성 ' + g + '</span><span>' + x.n + '번 · 이익 ' + x.win + '</span><strong class="' + tone(x.sum) + '">' + manwon(x.sum) + '</strong></div>';
+        return '<div class="grow"><span class="chip g-' + g + '">점검 ' + g + '</span><span>' + x.n + '번 · 이익 ' + x.win + '</span><strong class="' + tone(x.sum) + '">' + manwon(x.sum) + '</strong></div>';
       }).join('') + '</section>';
     }).join('') : '<p class="empty">' + (span === 'week' ? '지난 7일 동안 끝난 거래가 없어요.' : '아직 끝난 거래가 없어요. 베타 알림 결과가 쌓이면 여기에 나와요.') + '</p>';
     return '<div class="seg" role="group" aria-label="기간"><button data-act="span" data-v="week" class="' + (span === 'week' ? 'on' : '') + '">지난 7일</button><button data-act="span" data-v="all" class="' + (span === 'all' ? 'on' : '') + '">전체</button></div>' +
@@ -618,7 +659,7 @@
     }).join('') + '<button role="radio" aria-checked="' + (cur === '직접') + '" class="' + (cur === '직접' ? 'on' : '') + '" data-act="preset" data-v="직접">직접 설정</button>';
     var body = '';
     if (!cur) {
-      body = '<p class="info">아직 조건을 고르지 않았어요. 지금은 안정성 보통 이상 · 신호 6점 이상 매수 알림을 받아요. <b>추천</b>을 눌러 보세요.</p>';
+      body = '<p class="info">아직 조건을 고르지 않았어요. 지금은 점검 보통 이상 · 신호 6점 이상 매수 알림을 받아요. <b>추천</b>을 눌러 보세요.</p>';
     } else if (cur !== '직접') {
       var ps = findPreset(cur) || { desc: '', rules: p.rules || {} };
       body = '<p class="small" style="margin:0;line-height:1.6;color:var(--sub)">' + esc(ps.desc || '') + '</p>' +
@@ -633,7 +674,7 @@
         '<div class="seg three" role="tablist" aria-label="시장">' + ['kr', 'us', 'crypto'].map(function (mk) {
           return '<button role="tab" aria-selected="' + (S.cm === mk) + '" class="' + (S.cm === mk ? 'on' : '') + '" data-act="cm" data-v="' + mk + '">' + MARKET[mk] + '</button>';
         }).join('') + '</div>' +
-        '<h3 class="sub-h">안정성 지표 <small>켜면 그 조건을 통과한 알림만 받아요</small></h3><div class="list inner">' +
+        '<h3 class="sub-h">안전 점검 지표 <small>켜면 그 조건을 통과한 알림만 받아요</small></h3><div class="list inner">' +
         GUARDS.filter(function (g) { return g[0] !== '실적' || S.cm === 'us'; }).map(function (g) { return sw('g-' + g[0], c.need.indexOf(g[0]) >= 0, g[1], g[2]); }).join('') + '</div>' +
         '<h3 class="sub-h">수익성 지표</h3><div class="list inner">' + sw('card', !!c.card, PROFIT[1], PROFIT[2]) + '</div>' +
         '<h3 class="sub-h">신호 점수 <small>지표 10가지 중 몇 개 이상 맞을 때 받을지</small></h3><div class="grades four" role="radiogroup" aria-label="신호 점수">' +
@@ -665,7 +706,7 @@
       '<section class="list">' + sw('push', on, '푸시 알림 받기', S.busy ? '켜는 중…' : (on ? '켜져 있어요' : '타점이 생기면 바로 알려 드려요'), S.busy) +
       sw('mk-kr', mk.indexOf('kr') >= 0, '국장', '평일 09:15 ~ 15:20') + sw('mk-us', mk.indexOf('us') >= 0, '미장', '평일 밤 (한국 시간)') +
       sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때 · 과거 기록에서 3일 뒤 실제로 내린 비율은 절반 정도였어요') +
-      sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
+      sw('brief', p.brief, '아침 브리핑', '매일 아침 8시쯤 밤사이 시장 요약 (일요일 쉼)') + sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
       '<a class="list item-link" href="#/guide"><span><b>타점노트 사용법</b><small>알림 읽는 법 · 사고파는 순서 · 장 시간</small></span><span aria-hidden="true">›</span></a>' +
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
@@ -678,12 +719,12 @@
     var sec = function (t, body) { return '<section class="card guide"><h2>' + t + '</h2>' + body + '</section>'; };
     var li = function (xs) { return '<ul>' + xs.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>'; };
     return top('<span style="display:flex;align-items:center;gap:2px"><a class="icon-btn" href="#/" aria-label="뒤로">' + ICON.back + '</a><span style="font-size:16px;font-weight:700">타점노트 사용법</span></span>') + '<main class="page">' +
-      sec('타점노트는 이런 앱이에요', '<p>국장·미장·코인에서 정해진 규칙(지표 10가지 + 안정성 검사)에 맞는 자리가 생기면 알려 줘요. 사람이 고르는 추천이 아니라 규칙대로 계산한 <b>참고 정보</b>예요.</p>') +
-      sec('🔴 매수 알림 읽는 법', li(['<b>매수 기준가</b>: 이 가격 근처나 아래에서 사요. 지금 가격이 많이 위면 기다려요.', '<b>손절가</b>: 여기에 닿으면 팔아서 손실을 작게 끊어요. 가장 중요해요.', '<b>1차 매도</b>: 여기서 절반을 팔고, 남은 절반은 손절가를 산 가격으로 올려요.', '<b>나머지</b>: 오른 뒤 고점에서 정해진 만큼 빠지면 팔아요.', '<b>안정성</b>: 시장 흐름·추세·눌림·변동성·실적·과거 성적 6가지 중 몇 개를 통과했는지예요.', '<b>신호 점수</b>: 지표 10가지 중 몇 개가 맞았는지예요.'])) +
+      sec('타점노트는 이런 앱이에요', '<p>국장·미장·코인에서 정해진 규칙(지표 10가지 + 안전 점검)에 맞는 자리가 생기면 알려 줘요. 사람이 고르는 추천이 아니라 규칙대로 계산한 <b>참고 정보</b>예요.</p>') +
+      sec('🔴 매수 알림 읽는 법', li(['<b>매수 기준가</b>: 이 가격 근처나 아래에서 사요. 지금 가격이 많이 위면 기다려요.', '<b>손절가</b>: 여기에 닿으면 팔아서 손실을 작게 끊어요. 가장 중요해요.', '<b>1차 매도</b>: 여기서 절반을 팔고, 남은 절반은 손절가를 산 가격으로 올려요.', '<b>나머지</b>: 오른 뒤 고점에서 정해진 만큼 빠지면 팔아요.', '<b>안전 점검</b>: 시장 흐름·추세·눌림·변동성·실적·과거 성적 6가지 중 몇 개를 통과했는지예요. 지표 설정의 <b>안정성 %</b>와는 다른 거예요.', '<b>신호 점수</b>: 지표 10가지 중 몇 개가 맞았는지예요.'])) +
       sec('🔵 매도 알림', '<p>이미 갖고 있는 종목이 약해질 때 와요. 갖고 있지 않다면 무시해도 돼요. 과거 기록에서 3일 뒤 실제로 내린 건 절반 정도라 참고만 하세요.</p>') +
       sec('알림이 오면 이 순서로', '<ol><li>앱에서 매수 기준가·손절가를 확인해요.</li><li>증권사 앱에서 <b>현재가</b>를 꼭 다시 봐요. 국장 시세는 늦을 수 있어요.</li><li>지정가로 주문해요. 한 종목에 돈을 너무 많이 넣지 않아요.</li><li>손절가에 알림이나 주문을 걸어 둬요.</li><li>타점 화면에서 <b>샀어요</b>를 눌러 매매일지에 적어요.</li></ol>') +
       sec('지표 설정 · 수익성 · 안정성', li(['<b>지표 설정</b> 탭에서 받을 매수 알림 조건을 골라요. 처음이면 <b>추천</b>이 무난해요.', '<b>수익성</b>: 알림대로 100만원씩 샀을 때 한 번 살 때 평균 수익률(수수료 포함)이에요.', '<b>안정성</b>: 알림이 있었던 달 중 수익 난 달의 비율이에요.', '모두 과거 데이터로 계산한 값이라 앞으로도 그렇다는 보장은 없어요.'])) +
-      sec('장 시간 (한국 시간)', li(['국장: 평일 09:00 ~ 15:30', '미장: 평일 23:30 ~ 다음 날 06:00 (미국 서머타임에는 22:30 ~ 05:00)', '코인: 24시간', '공휴일 휴장은 앱 표시에 반영되지 않아요.'])) +
+      sec('장 시간 (한국 시간)', li(['국장: 평일 09:00 ~ 15:30', '미장: 평일 23:30 ~ 다음 날 06:00 (미국 서머타임에는 22:30 ~ 05:00)', '코인: 24시간', '휴장일과 미장 조기 마감은 첫 화면 장 시간에 반영돼요. 국장 2027년 휴장일은 거래소 공식 발표 전이라 공휴일 기준이에요.'])) +
       sec('꼭 지켜 주세요', li(['손절가는 꼭 지켜요. 버티다 손실이 커지는 경우가 가장 많아요.', '빌린 돈이나 당장 필요한 돈으로 하지 않아요.', '알림은 참고 정보예요. 투자 판단과 책임은 본인에게 있어요.'])) +
       '</main>' + menu('');
   }
@@ -717,12 +758,24 @@
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
     sell: function () { var p = prefs(); p.sell = !p.sell; savePrefs(p); },
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
+    brief: function () { var p = prefs(); p.brief = !p.brief; savePrefs(p); toast(p.brief ? '아침 브리핑을 받아요' : '아침 브리핑을 껐어요'); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
     showall: function () { S.showAll = !S.showAll; render(); },
     briefhide: function () { var b = S.feed && S.feed.brief; if (b) store.set(K.briefHide, b.day); render(); },
     jbuyopen: function (t) { S.jbuy = t.dataset.v; S.jsell = null; render(); },
     jsellopen: function (t) { S.jsell = t.dataset.v; S.jbuy = null; S.jdel = null; render(); },
     jcancel: function () { S.jbuy = S.jsell = null; render(); },
+    jexport: function () {
+      var list = jr();
+      if (!list.length) { toast('내보낼 기록이 없어요'); return; }
+      var blob = new Blob([JSON.stringify({ app: 'tajeom-note', v: 1, at: new Date().toISOString(), items: list }, null, 1)], { type: 'application/json' });
+      var a = document.createElement('a'), d = new Date();
+      a.href = URL.createObjectURL(blob);
+      a.download = 'tajeom-journal-' + d.getFullYear() + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + (d.getDate() < 10 ? '0' : '') + d.getDate() + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      toast('백업 파일을 저장했어요');
+    },
     jdel: function (t) {
       var id = t.dataset.v;
       if (S.jdel !== id) { S.jdel = id; render(); return; }
@@ -760,6 +813,9 @@
     if (v === 'all') { var on = e.target.checked; S.agree = S.agree.map(function () { return on; }); }
     else S.agree[+v] = e.target.checked;
     render();
+  });
+  $app.addEventListener('change', function (e) {
+    if (e.target.hasAttribute && e.target.hasAttribute('data-imp')) { jImport(e.target.files && e.target.files[0]); e.target.value = ''; }
   });
   $app.addEventListener('submit', function (e) {
     var form = e.target.getAttribute('data-form');
