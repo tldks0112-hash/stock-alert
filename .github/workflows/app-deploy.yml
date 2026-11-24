@@ -48,3 +48,12 @@ jobs:
 
       - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true        # 가끔 GitHub 쪽 사정으로 실패하면 1분 뒤 한 번 더
+
+      - name: 잠깐 기다렸다 다시 시도
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 60
+
+      - id: deploy2
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4
