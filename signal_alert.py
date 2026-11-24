@@ -189,17 +189,21 @@ def get_access_token():
 
 
 def send_kakao(access_token, text):
-    template = {"object_type": "text", "text": text,
-                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL},
-                "button_title": BUTTON_TITLE}
-    r = requests.post(KAKAO_SEND_URL, timeout=10,
-                      headers={"Authorization": f"Bearer {access_token}"},
-                      data={"template_object": json.dumps(template, ensure_ascii=False)})
-    try:
-        if r.status_code == 200 and r.json().get("result_code") == 0:
-            return
-    except ValueError:
-        pass
+    """버튼 칸 없이 보내 봄 (카카오는 링크가 비어 있으면 버튼을 안 그려요).
+    카카오가 그 형식을 거절하면 지금처럼 작은 '확인' 버튼을 붙여 다시 보냄"""
+    tries = [{"object_type": "text", "text": text, "link": {}},
+             {"object_type": "text", "text": text, "button_title": BUTTON_TITLE,
+              "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}]
+    r = None
+    for template in tries:
+        r = requests.post(KAKAO_SEND_URL, timeout=10,
+                          headers={"Authorization": f"Bearer {access_token}"},
+                          data={"template_object": json.dumps(template, ensure_ascii=False)})
+        try:
+            if r.status_code == 200 and r.json().get("result_code") == 0:
+                return
+        except ValueError:
+            pass
     raise RuntimeError(f"카톡 보내기 실패 {r.status_code}: {r.text[:300]}")
 
 
