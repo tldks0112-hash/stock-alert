@@ -65,7 +65,7 @@ def report_key():
     return hashlib.sha256(("sim|" + REST_KEY).encode()).hexdigest()[:20] if REST_KEY else "report"
 
 
-LINK_URL = "https://tossinvest.com"     # '확인'을 누르면 열리는 곳 (카카오에 등록된 주소여야 함)
+LINK_URL = "https://tossinvest.com"     # '확인'을 누르면 토스증권이 열려요 (카카오에 등록된 주소)
 
 
 # ---------- 신호 계산 (5단계와 같은 규칙) ----------
@@ -189,21 +189,17 @@ def get_access_token():
 
 
 def send_kakao(access_token, text):
-    """버튼 칸 없이 보내 봄 (카카오는 링크가 비어 있으면 버튼을 안 그려요).
-    카카오가 그 형식을 거절하면 지금처럼 작은 '확인' 버튼을 붙여 다시 보냄"""
-    tries = [{"object_type": "text", "text": text, "link": {}},
-             {"object_type": "text", "text": text, "button_title": BUTTON_TITLE,
-              "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}]
-    r = None
-    for template in tries:
-        r = requests.post(KAKAO_SEND_URL, timeout=10,
-                          headers={"Authorization": f"Bearer {access_token}"},
-                          data={"template_object": json.dumps(template, ensure_ascii=False)})
-        try:
-            if r.status_code == 200 and r.json().get("result_code") == 0:
-                return
-        except ValueError:
-            pass
+    """카톡 보내기. 아래 '확인' 버튼(또는 글)을 누르면 토스증권이 열려요"""
+    template = {"object_type": "text", "text": text, "button_title": BUTTON_TITLE,
+                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}
+    r = requests.post(KAKAO_SEND_URL, timeout=10,
+                      headers={"Authorization": f"Bearer {access_token}"},
+                      data={"template_object": json.dumps(template, ensure_ascii=False)})
+    try:
+        if r.status_code == 200 and r.json().get("result_code") == 0:
+            return
+    except ValueError:
+        pass
     raise RuntimeError(f"카톡 보내기 실패 {r.status_code}: {r.text[:300]}")
 
 
