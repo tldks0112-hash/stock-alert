@@ -70,6 +70,8 @@ NY = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")
 MARKETS = {"kr": KR_STOCKS, "us": US_STOCKS, "crypto": COINS}          # 카톡도 이 순서로 와요
 MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙 코인"}
+KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요약만, 자세한 기준가는 앱에서 / False: 예전처럼 종목별 자세히
+APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
 INDEX = {"kr": "069500.KS", "us": "SPY", "crypto": "BTC-KRW"}           # 시장 필터에 쓰는 대표 지수
@@ -641,6 +643,32 @@ def summary_messages(market, items, now):
     return base.chunk(lines)
 
 
+def short_messages(items, now):
+    """카톡 짧게: 이번에 새로 생긴 타점을 한 줄씩만. 자세한 기준가·손절가는 앱에서"""
+    head = f"🔔 새 타점 {len(items)}건 · {now.astimezone(KST):%m/%d %H:%M}"
+    rows = []
+    for a in items:
+        word = "🔴 매수" if a["side"] == "buy" else "🔵 매도"
+        dot = f" {GRADE_ICON[a['grade']]}" if a.get("grade") else ""
+        rows.append(f"{word} {a['name']} {money(a['market'], a['price'])}{dot}")
+    tail = "기준가·손절가는 앱에서 확인"
+    msgs, cur = [], [head]
+    for r in rows:
+        if u16len("\n".join(cur + [r, tail])) > 200:      # 카톡 200자 제한 (이모지는 2자로 셈)
+            msgs.append("\n".join(cur))
+            cur = [f"🔔 이어서 ({len(msgs) + 1})"]
+        cur.append(r)
+    msgs.append("\n".join(cur + [tail]))
+    return msgs
+
+
+def send_short(token, text):
+    try:
+        base.send_kakao(token, text, link=APP_URL, button="앱에서 보기")
+    except Exception:
+        base.send_kakao(token, text)        # 카카오에 앱 주소가 아직 등록 안 됐으면 기존 '확인' 버튼으로
+
+
 # ---------- 알림 기록 ----------
 
 def load_state():
@@ -1041,22 +1069,30 @@ def main():
         for msg in notices:
             base.send_kakao(token, msg)
             time.sleep(1)
+        ordered = []
         for market, cats in MARKETS.items():
             order = {c: i for i, c in enumerate(cats)}
-            items = sorted((a for a in alerts if a["market"] == market), key=lambda a: order[a["category"]])
+            ordered += sorted((a for a in alerts if a["market"] == market), key=lambda a: order[a["category"]])
+        if KAKAO_SHORT and ordered:
+            for msg in short_messages(ordered, now):
+                send_short(token, msg)
+                time.sleep(1)
+        for market in MARKETS:
+            items = [a for a in ordered if a["market"] == market]
             if not items:
                 continue
-            if len(items) >= 2:
+            if not KAKAO_SHORT and len(items) >= 2:
                 for msg in summary_messages(market, items, now):
                     base.send_kakao(token, msg)
                     time.sleep(1)
             for a in items:
-                base.send_kakao(token, a["msg"])
+                if not KAKAO_SHORT:
+                    base.send_kakao(token, a["msg"])
+                    time.sleep(1)
                 state[a["key"]] = now.isoformat()
                 if a["side"] == "buy":
                     track_start(book, market, a["ticker"], a["lv"], a["bar"], now, a.get("grade") or "높음")
                 log(f"알림 보냄 → {a['key']}")
-                time.sleep(1)
     save_state(state, now)
     save_book(book, now)
     app = to_app(alerts, book, now)

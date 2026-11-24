@@ -188,10 +188,11 @@ def get_access_token():
     return j["access_token"]
 
 
-def send_kakao(access_token, text):
-    """카톡 보내기. 아래 '확인' 버튼(또는 글)을 누르면 토스증권이 열려요"""
-    template = {"object_type": "text", "text": text, "button_title": BUTTON_TITLE,
-                "link": {"web_url": LINK_URL, "mobile_web_url": LINK_URL}}
+def send_kakao(access_token, text, link=None, button=None):
+    """카톡 보내기. 아래 버튼(또는 글)을 누르면 link 주소가 열려요 (기본: '확인' → 토스증권)"""
+    url = link or LINK_URL
+    template = {"object_type": "text", "text": text, "button_title": button or BUTTON_TITLE,
+                "link": {"web_url": url, "mobile_web_url": url}}
     r = requests.post(KAKAO_SEND_URL, timeout=10,
                       headers={"Authorization": f"Bearer {access_token}"},
                       data={"template_object": json.dumps(template, ensure_ascii=False)})
