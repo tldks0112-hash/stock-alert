@@ -84,6 +84,14 @@ def put_kv(key, value):
                          headers=_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})))
 
 
+def get_kv(key):
+    """앱 서버에 저장된 값 하나 (없으면 None)"""
+    q = urllib.parse.quote(key, safe="")
+    r = _check(requests.get(f"{URL}/rest/v1/kv?key=eq.{q}&select=value", timeout=15, headers=_headers()))
+    rows = r.json()
+    return rows[0]["value"] if rows else None
+
+
 def get_subs():
     r = _check(requests.get(f"{URL}/rest/v1/subs?select=endpoint,sub,prefs", timeout=15, headers=_headers()))
     return r.json()

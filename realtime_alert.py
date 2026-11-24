@@ -72,6 +72,8 @@ MARKETS = {"kr": KR_STOCKS, "us": US_STOCKS, "crypto": COINS}          # 카톡�
 MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙 코인"}
 KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요약만, 자세한 기준가는 앱에서 / False: 예전처럼 종목별 자세히
 APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
+KAKAO_PRESET = str(S.get("카톡_조건", "추천"))   # 카톡도 앱의 추천 설정대로 ("안정"/"기회"도 가능, "기존"이면 예전 방식)
+KAKAO_RULES = None                              # 실행할 때 앱 서버에서 그 설정의 시장별 조건을 받아 옴
 APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
@@ -953,8 +955,17 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
                 hard.append("손절폭이 손실 한도보다 큼")
         once = side == "buy" and guard_on(market, "하루_한번")
         to_kakao, to_app_ = False, False
+        k_rule = (KAKAO_RULES or {}).get(market)
         if in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
+        elif k_rule is not None:                 # 카톡도 추천 설정(시장별 지표 조건)대로
+            if hard:
+                log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(hard)})")
+            elif not app_bridge.passes({"score": score, "side": side, "flags": flags,
+                                        "misses": stab[3] if stab else []}, k_rule):
+                log(f"{t}: {word} 타점 {score}/10 · '{KAKAO_PRESET}' 조건에 안 맞아 카톡 안 함")
+            else:
+                to_kakao = True
         elif score < min_score(market):
             log(f"{t}: {word} 타점 있지만 신호 점수 {score}/10 → 카톡 안 함")
         elif blocked or hard:
@@ -1051,8 +1062,24 @@ def to_app(alerts, book, now):
         return {"error": f"{step}: {app_bridge.why(e)}"}
 
 
+def kakao_rules():
+    """카톡 조건: 앱 서버의 추천 설정에서 시장별 조건을 받아 옴. 못 받으면 None → 예전 방식"""
+    if KAKAO_PRESET in ("기존", "") or not app_bridge.enabled():
+        return None
+    try:
+        presets = app_bridge.get_kv("presets") or {}
+        for p in presets.get("list", []):
+            if p.get("id") == KAKAO_PRESET and isinstance(p.get("rules"), dict):
+                return p["rules"]
+    except Exception as e:
+        log(f"추천 설정 받기 실패 ({e}) → 예전 방식으로 카톡")
+    return None
+
+
 def main():
+    global KAKAO_RULES
     force = os.environ.get("FORCE") == "1" or "force" in sys.argv
+    KAKAO_RULES = kakao_rules()
     if not any(MARKETS.values()):
         sys.exit("❗ 비밀값 ALERT_SETTINGS에 종목이 없어요. 설정 방법을 다시 확인해 주세요.")
     now = datetime.now(timezone.utc)
@@ -1120,7 +1147,8 @@ def main():
             tail = f" · 앱 연결 실패 ({app['error']})"
         else:
             tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
-    print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}")
+    mode = f" · 카톡 {KAKAO_PRESET}" if KAKAO_RULES else " · 카톡 기존 방식"
+    print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}{mode}")
 
 
 if __name__ == "__main__":
