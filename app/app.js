@@ -18,7 +18,7 @@
     ['과거 성적은 미래 수익을 보장하지 않아요', '성적표와 시뮬레이션은 지난 데이터로 계산한 결과예요. 서비스 제공자는 금융투자업자가 아니에요.']
   ];
   var S = { feed: null, loading: false, error: '', tab: 'all', rec: 'sim', agree: [false, false, false, false],
-    codeErr: '', busy: false, pushHelp: false, open: null };
+    codeErr: '', busy: false, pushHelp: false, open: null, agreedNow: false };   // agreedNow: 이번에 앱을 연 뒤 동의했는지 (앱을 열 때마다 안내·동의 화면)
   var OPEN_CODE = 'OPEN';   // 서버에 이 코드가 켜져 있으면 초대 코드 없이 바로 들어가요
 
   // ---------- 작은 도구 ----------
@@ -371,7 +371,7 @@
   function route() { var p = location.hash.replace(/^#\/?/, '').split('/'); return { p: p[0] || 'home', id: p[1] }; }
   function render() {
     var r = route(), html;
-    if (!store.get(K.consent, false)) html = pageWelcome();
+    if (!S.agreedNow) html = pageWelcome();
     else if (LIVE && !code()) {
       if (S.open === false) html = pageCode();
       else { html = pageWait(); if (S.open === null) setTimeout(checkOpen, 0); }
@@ -386,7 +386,7 @@
     render.last = location.hash;
   }
   var ACT = {
-    start: function () { store.set(K.consent, true); render(); if (!LIVE || code()) loadFeed(); },
+    start: function () { S.agreedNow = true; S.agree = S.agree.map(function () { return false; }); store.set(K.consent, true); render(); if (!LIVE || code()) loadFeed(); },
     tab: function (t) { S.tab = t.dataset.v; render(); },
     rec: function (t) { S.rec = t.dataset.v; render(); },
     span: function (t) { S.liveSpan = t.dataset.v; render(); },
