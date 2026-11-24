@@ -169,17 +169,32 @@ def evaluate(cands, min_score, need, card, mode, pause):
     return taken
 
 
+def month_of(ta):
+    t = pd.Timestamp(ta)
+    return (t.tz_convert(rt.KST) if t.tzinfo else t).strftime("%Y-%m")
+
+
+def monthly(taken):
+    """알림 받은 달(한국 시간)마다 손익 합계 (만원) — 앱의 '안정성 = 수익 난 달 비율'에 써요"""
+    out = {}
+    for ta, _, r, _ in taken:
+        k = month_of(ta)
+        out[k] = out.get(k, 0.0) + r * UNIT
+    return {k: round(v, 2) for k, v in sorted(out.items())}
+
+
 def metrics(taken, mid):
     rets = np.array([r for _, _, r, _ in taken], float)
     if not len(rets):
-        return {"n": 0, "wins": 0, "total": 0.0, "avg": 0.0, "pf": 0.0, "dd": 0.0, "h1": 0.0, "h2": 0.0}
+        return {"n": 0, "wins": 0, "total": 0.0, "avg": 0.0, "pf": 0.0, "dd": 0.0, "h1": 0.0, "h2": 0.0, "mon": {}}
     cum = np.cumsum(rets * UNIT)
     dd = float((np.maximum.accumulate(np.concatenate([[0], cum])) - np.concatenate([[0], cum])).max())
     gain, loss = rets[rets > 0].sum(), -rets[rets <= 0].sum()
     h1 = sum(r for ta, _, r, _ in taken if ta < mid) * UNIT
     return {"n": int(len(rets)), "wins": int((rets > 0).sum()), "total": round(float(cum[-1]), 2),
             "avg": round(float(rets.mean() * 100), 3), "pf": round(float(gain / loss), 3) if loss > 0 else 99.0,
-            "dd": round(dd, 2), "h1": round(float(h1), 2), "h2": round(float(cum[-1] - h1), 2)}
+            "dd": round(dd, 2), "h1": round(float(h1), 2), "h2": round(float(cum[-1] - h1), 2),
+            "mon": monthly(taken)}
 
 
 def post_rows(table, rows):
