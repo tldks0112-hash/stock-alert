@@ -457,4 +457,13 @@
 
   render();
   if (store.get(K.consent, false)) loadFeed();
+
+  // 시작 화면: 앱을 열 때 1초쯤 보여 주고 사라짐 (처음 쓰는 사람은 그다음 안내·동의 화면)
+  var splash = document.getElementById('splash');
+  if (splash) {
+    setTimeout(function () {
+      splash.classList.add('hide');
+      setTimeout(function () { if (splash.parentNode) splash.parentNode.removeChild(splash); }, 400);
+    }, 1100);
+  }
 })();
