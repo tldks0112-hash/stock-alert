@@ -22,9 +22,9 @@
   var SCORES = [5, 6, 7, 8];
   var MISS_OF = { '시장': '시장약세', '추세': '추세약세', '눌림': '이미오름', '변동성': '변동큼', '실적': '실적임박' };
   var FALLBACK_PRESETS = [
-    { id: '추천', label: '추천', desc: '지난 2년 백테스트에서 가장 고르게 좋았던 조합이에요.',
+    { id: '추천', label: '추천', desc: '과거 백테스트에서 가장 고르게 좋았던 조합이에요.',
       rules: { kr: { score: 6, need: ['시장', '추세'], card: false }, us: { score: 6, need: ['시장', '추세'], card: false }, crypto: { score: 6, need: ['시장', '추세'], card: false } } },
-    { id: '안정', label: '안정 우선', desc: '손실 위험을 줄이려고 조건을 많이 켰어요. 알림이 드물어요.',
+    { id: '안정', label: '신중하게', desc: '조건을 더 엄격하게 켜서 알림이 드물어요.',
       rules: { kr: { score: 7, need: ['시장', '추세', '눌림', '변동성', '실적'], card: true }, us: { score: 7, need: ['시장', '추세', '눌림', '변동성', '실적'], card: true }, crypto: { score: 7, need: ['시장', '추세', '눌림', '변동성'], card: true } } },
     { id: '기회', label: '기회 많이', desc: '조건을 줄여 알림을 많이 받아요. 손실도 더 자주 나요.',
       rules: { kr: { score: 5, need: [], card: false }, us: { score: 5, need: [], card: false }, crypto: { score: 5, need: [], card: false } } }];
@@ -266,33 +266,40 @@
     return (w > 0 ? '+' : w < 0 ? '-' : '') + Math.abs(w).toLocaleString('ko-KR') + '원';
   }
   function marketStat(mk, x) {
-    if (!x || !x.n) return '<div class="mk-row"><div class="line"><b class="mk">' + MARKET[mk] + '</b><span class="small">지난 2년 이 조건에 맞는 알림 없음</span></div></div>';
-    var t = stat(x);
+    if (!x || !x.n) return '<div class="mk-row"><div class="line"><b class="mk">' + MARKET[mk] + '</b><span class="small">이 조건에 맞는 알림 없음</span></div></div>';
+    var t = stat(x), sp = x.span ? spanText([x]) : '';
     return '<div class="mk-row"><div class="line"><span><b class="mk">' + MARKET[mk] + '</b> 수익성 <b class="' + tone(t.profit) + '">' + pct(t.profit) + '</b> · 안정성 <b>' + (t.stable == null ? '-' : Math.round(t.stable) + '%') + '</b></span>' +
       '<b class="' + tone(x.total) + '">' + manwon(x.total) + '</b></div>' +
-      '<p class="small" style="margin:0">' + x.n + '번 · 이긴 비율 ' + Math.round(t.win) + '% · 앞 1년 <b class="' + tone(x.h1) + '">' + manwon(x.h1) + '</b> · 뒤 1년 <b class="' + tone(x.h2) + '">' + manwon(x.h2) + '</b>' +
+      '<p class="small" style="margin:0">' + (sp ? sp + ' · ' : '') + x.n + '번 · 이긴 비율 ' + Math.round(t.win) + '% · 앞 절반 <b class="' + tone(x.h1) + '">' + manwon(x.h1) + '</b> · 뒤 절반 <b class="' + tone(x.h2) + '">' + manwon(x.h2) + '</b>' +
       (x.dd != null ? ' · 가장 크게 잃은 구간 ' + (x.dd >= 0.1 ? '-' + manwon(x.dd).replace('+', '') : '없음') : '') +
       (x.n < 30 ? '<br><span class="warn-t">알림이 ' + x.n + '번뿐이라 숫자를 믿기 어려워요</span>' : '') + '</p></div>';
   }
+  function ym(iso) { var d = new Date(iso); return isNaN(d) ? '' : kst(d, { year: 'numeric' }).replace(/[^0-9]/g, '') + '.' + kst(d, { month: '2-digit' }).replace(/[^0-9]/g, ''); }
+  function spanText(list) {         // 실제 백테스트 기간 (국장·미장 약 3년, 코인 2년)
+    var st = null, en = null;
+    list.forEach(function (x) { if (x && x.span) { if (!st || x.span[0] < st) st = x.span[0]; if (!en || x.span[1] > en) en = x.span[1]; } });
+    return st && en ? ym(st) + '~' + ym(en) : '';
+  }
   function statSection(p) {
-    var head = '<div class="line"><h2 style="font-size:15px">내 설정 예상 성적</h2><span class="small">지난 2년 백테스트</span></div>';
     var R = curStats(p), mks = ['kr', 'us', 'crypto'].filter(function (mk) { return p.markets.indexOf(mk) >= 0; });
+    var per = R && R.data ? spanText(mks.map(function (mk) { return R.data[mk]; })) : '';
+    var head = '<div class="line"><h2 style="font-size:15px">내 설정 예상 성적</h2><span class="small">' + (per ? per + ' ' : '과거 ') + '백테스트</span></div>';
     var msg = !p.rules ? '아래에서 <b>추천</b>이나 <b>직접 설정</b>을 고르면 수익성과 안정성이 나와요.'
-      : !LIVE ? '앱 연결 후 지난 2년 성적이 여기에 나와요.'
+      : !LIVE ? '앱 연결 후 과거 성적이 여기에 나와요.'
       : !mks.length ? '설정에서 국장·미장·코인을 모두 꺼 두었어요.'
       : R.loading ? '계산 중…'
       : R.err || !R.data ? '성적을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' : '';
     if (msg) return '<section class="card mystat">' + head + '<p class="small" style="margin:0">' + msg + '</p></section>';
     var list = mks.map(function (mk) { return R.data[mk] || { n: 0, wins: 0, total: 0, h1: 0, h2: 0, mon: {} }; });
     var all = combine(list), t = stat(all);
-    var big = !all.n ? '<p class="info">지난 2년 동안 이 조건에 맞는 매수 알림이 없었어요. 조건을 조금 풀어 보세요.</p>'
+    var big = !all.n ? '<p class="info">백테스트 기간 동안 이 조건에 맞는 매수 알림이 없었어요. 조건을 조금 풀어 보세요.</p>'
       : '<div class="big2"><div><span>수익성</span><strong class="' + tone(t.profit) + '">' + pct(t.profit) + '</strong><em>한 번 살 때 평균<br>100만원당 ' + perHundred(t.profit) + '</em></div>' +
         '<div><span>안정성</span><strong>' + (t.stable == null ? '-' : Math.round(t.stable) + '%') + '</strong><em>' + (t.stable == null ? '곧 계산돼요' : '수익 난 달 비율<br>' + t.months + '달 중 ' + t.pos + '달') + '</em>' +
         (t.stable == null ? '' : '<div class="meter" aria-hidden="true"><i style="width:' + Math.round(t.stable) + '%"></i></div>') + '</div></div>' +
         '<div class="kv"><div class="line"><span>알림 수</span><b>' + all.n + '번</b></div>' +
         '<div class="line"><span>이긴 비율</span><b>' + Math.round(t.win) + '%</b></div>' +
-        '<div class="line"><span>2년 합계 (알림마다 100만원)</span><b class="' + tone(all.total) + '">' + manwon(all.total) + '</b></div>' +
-        '<div class="line"><span>앞 1년 / 뒤 1년</span><b><span class="' + tone(all.h1) + '">' + manwon(all.h1) + '</span> / <span class="' + tone(all.h2) + '">' + manwon(all.h2) + '</span></b></div></div>';
+        '<div class="line"><span>합계 (알림마다 100만원)</span><b class="' + tone(all.total) + '">' + manwon(all.total) + '</b></div>' +
+        '<div class="line"><span>기간 앞 절반 / 뒤 절반</span><b><span class="' + tone(all.h1) + '">' + manwon(all.h1) + '</span> / <span class="' + tone(all.h2) + '">' + manwon(all.h2) + '</span></b></div></div>';
     var off = ['kr', 'us', 'crypto'].filter(function (mk) { return mks.indexOf(mk) < 0; }).map(function (mk) { return MARKET[mk]; });
     return '<section class="card mystat">' + head + big +
       '<h3 class="sub-h">시장별</h3>' + mks.map(function (mk) { return marketStat(mk, R.data[mk]); }).join('') +
@@ -420,7 +427,7 @@
         '<div class="box b"><span>손절가</span><strong>' + money(m, a.stop) + '</strong><em>' + (a.loss ? '닿으면 손실 -' + money(m, a.loss) : '') + '</em></div></div>' +
         '<ol class="steps">' + steps.map(function (s, i) { return '<li><i>' + (i + 1) + '</i><span>' + s + '</span></li>'; }).join('') + '</ol></section>');
       var miss = a.misses || [], passN = (a.total || 0) - miss.filter(function (x) { return x !== '🟢연속손실'; }).length;
-      var hist = a.hist ? '<p class="info">지난 2년 ' + (a.hist.src === '시장' ? '같은 시장 알림 전체' : '이 종목 알림') + '대로 샀다면 <b>' + a.hist.n + '번 · 승률 ' + Math.round(a.hist.win) + '% · 평균 ' + (a.hist.avg > 0 ? '+' : '') + Number(a.hist.avg).toFixed(1) + '%</b></p>' : '';
+      var hist = a.hist ? '<p class="info">과거 ' + (a.hist.src === '시장' ? '같은 시장 알림 전체' : '이 종목 알림') + '대로 샀다면 <b>' + a.hist.n + '번 · 승률 ' + Math.round(a.hist.win) + '% · 평균 ' + (a.hist.avg > 0 ? '+' : '') + Number(a.hist.avg).toFixed(1) + '%</b></p>' : '';
       out.push('<section class="card"><div class="line"><h2>안정성</h2>' + chip(a) + '</div><ul class="checks">' +
         miss.map(function (x) { return '<li>' + ICON.no + esc(MISS[x] || x) + '</li>'; }).join('') +
         (passN > 0 ? '<li>' + ICON.ok + (miss.length ? '나머지 ' + passN + '개 통과' : passN + '개 모두 통과') + '</li>' : '') + '</ul>' + hist +
@@ -449,7 +456,7 @@
       return '<div class="grow"><span class="chip g-' + k + '">안정성 ' + k + '</span><span>' + (x ? x.n + '번 · 승률 ' + Math.round(x.win / x.n * 100) + '%' : '거래 없음') + '</span><strong class="' + tone(x && x.total) + '">' + (x ? manwon(x.total) : '-') + '</strong></div>';
     }).join('');
     return '<section class="card"><div class="line"><h2>' + MARKET[mk.market] + '</h2><span class="small">' + mk.tickers + '종목 · 기준 ' + mk.cur + '점</span></div>' + bars +
-      '<div class="line" style="border-top:1px solid var(--chip);padding-top:10px"><span>안정성 검사 · 앞 1년 / 뒤 1년</span><b>' + half + '</b></div>' +
+      '<div class="line" style="border-top:1px solid var(--chip);padding-top:10px"><span>안정성 검사 · 기간 앞 절반 / 뒤 절반</span><b>' + half + '</b></div>' +
       grades +
       (mk.sell ? '<div class="line"><span>매도 알림 적중률 (3일 뒤)</span><b>10번 중 ' + Math.round(mk.sell.hits) + '번</b></div>' : '') + '</section>';
   }
@@ -471,10 +478,10 @@
     if (!f) body = '<p class="empty">' + (S.error ? esc(S.error) : '불러오는 중…') + '</p>';
     else if (S.rec === 'sim') {
       body = f.sim && f.sim.markets && f.sim.markets.length
-        ? '<p class="foot-note" style="margin:0 4px">알림이 올 때마다 100만원씩 샀다고 치고 지난 2년을 다시 돌려 본 결과예요. 수수료 0.2% 포함 · ' + kst(new Date(f.sim.made), { month: 'numeric', day: 'numeric' }) + ' 계산</p>' + f.sim.markets.map(simSection).join('')
+        ? '<p class="foot-note" style="margin:0 4px">알림이 올 때마다 100만원씩 샀다고 치고 과거(국장·미장 약 3년, 코인 2년)를 다시 돌려 본 결과예요. 수수료 0.2% 포함 · ' + kst(new Date(f.sim.made), { month: 'numeric', day: 'numeric' }) + ' 계산</p>' + f.sim.markets.map(simSection).join('')
         : '<p class="empty">아직 계산한 결과가 없어요.<br>점검 작업을 한 번 돌리면 여기에 나와요.</p>';
     } else body = liveSection(f.live);
-    return top('<h1 style="margin:0;font-size:20px">성적표</h1>', '', demoBar() + '<div class="seg" role="tablist"><button role="tab" data-act="rec" data-v="sim" class="' + (S.rec === 'sim' ? 'on' : '') + '" aria-selected="' + (S.rec === 'sim') + '">2년 시뮬레이션</button><button role="tab" data-act="rec" data-v="live" class="' + (S.rec === 'live' ? 'on' : '') + '" aria-selected="' + (S.rec === 'live') + '">실전 기록</button></div>') +
+    return top('<h1 style="margin:0;font-size:20px">성적표</h1>', '', demoBar() + '<div class="seg" role="tablist"><button role="tab" data-act="rec" data-v="sim" class="' + (S.rec === 'sim' ? 'on' : '') + '" aria-selected="' + (S.rec === 'sim') + '">과거 시뮬레이션</button><button role="tab" data-act="rec" data-v="live" class="' + (S.rec === 'live' ? 'on' : '') + '" aria-selected="' + (S.rec === 'live') + '">실전 기록</button></div>') +
       '<main class="page">' + body + '<p class="foot-note">과거 성적은 미래 수익을 보장하지 않아요. 투자 참고용 정보이며 투자자문이 아니에요.</p></main>' + menu('record');
   }
   function sw(act, on, label, hint, disabled) {
@@ -508,8 +515,8 @@
         '<h3 class="sub-h">신호 점수 <small>지표 10가지 중 몇 개 이상 맞을 때 받을지</small></h3><div class="grades four" role="radiogroup" aria-label="신호 점수">' +
         SCORES.map(function (n) { return '<button role="radio" aria-checked="' + (c.score === n) + '" class="' + (c.score === n ? 'on' : '') + '" data-act="score" data-v="' + n + '">' + n + '점 이상</button>'; }).join('') + '</div>';
       var R = curStats(p);
-      body += '<h3 class="sub-h">' + MARKET[S.cm] + '을 이 조건으로 지난 2년</h3>' +
-        (!LIVE ? '<p class="small" style="margin:0">앱 연결 후 지난 2년 성적이 여기에 나와요.</p>'
+      body += '<h3 class="sub-h">' + MARKET[S.cm] + '을 이 조건으로 돌려 보면</h3>' +
+        (!LIVE ? '<p class="small" style="margin:0">앱 연결 후 과거 성적이 여기에 나와요.</p>'
           : !R || R.loading ? '<p class="small" style="margin:0">계산 중…</p>'
           : R.err || !R.data ? '<p class="small" style="margin:0">성적을 불러오지 못했어요.</p>'
           : marketStat(S.cm, R.data[S.cm])) +
@@ -523,7 +530,7 @@
     return top('<h1 style="margin:0;font-size:20px">지표 설정</h1>', '', demoBar() +
         '<p class="notice">어떤 매수 알림을 받을지 정해요. 홈 화면 목록과 푸시 알림 모두 이 조건대로 걸러져요.</p>') +
       '<main class="page">' + statSection(p) + condSection(p) +
-      '<p class="foot-note">지난 2년 성적은 알림마다 100만원씩 샀다고 치고, 수수료 0.2%를 빼고 계산했어요. 과거 성적은 미래 수익을 보장하지 않아요. 투자 참고용 정보이며 투자자문이 아니에요.</p></main>' + menu('ind');
+      '<p class="foot-note">과거 성적은 국장·미장 약 3년, 코인 2년치 1시간봉으로 알림마다 100만원씩 샀다고 치고, 수수료 0.2%를 빼고 계산했어요. 수익성은 한 번 살 때 평균 수익률, 안정성은 알림이 있었던 달 중 수익 난 달의 비율이에요. 과거 성적은 미래 수익을 보장하지 않아요. 투자 참고용 정보이며 투자자문이 아니에요.</p></main>' + menu('ind');
   }
   function pageSettings() {
     var p = prefs(), on = pushOn(), mk = p.markets;
@@ -533,7 +540,7 @@
     return top('<h1 style="margin:0;font-size:20px">알림 설정</h1>', '', demoBar()) + '<main class="page">' + help + denied +
       '<section class="list">' + sw('push', on, '푸시 알림 받기', S.busy ? '켜는 중…' : (on ? '켜져 있어요' : '타점이 생기면 바로 알려 드려요'), S.busy) +
       sw('mk-kr', mk.indexOf('kr') >= 0, '국장', '평일 09:15 ~ 15:20') + sw('mk-us', mk.indexOf('us') >= 0, '미장', '평일 밤 (한국 시간)') +
-      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때 · 지난 2년 3일 뒤 실제로 내린 비율은 절반 정도였어요') +
+      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때 · 과거 기록에서 3일 뒤 실제로 내린 비율은 절반 정도였어요') +
       sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
