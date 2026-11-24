@@ -109,7 +109,7 @@ ul.checks svg { width: 16px; height: 16px; flex: none; }
 .ok { margin: 0; font-size: 13px; line-height: 1.55; color: var(--hi); background: var(--hi-bg); border-radius: 10px; padding: 10px 12px; }
 
 nav.menu { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--card); border-top: 1px solid var(--line); padding: 6px 8px calc(10px + var(--safe-b)); }
-nav.menu > div { max-width: 520px; margin: 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+nav.menu > div { max-width: 520px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 nav.menu a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px; font-size: 11px; color: var(--mut); }
 nav.menu a.on { color: var(--ink); font-weight: 600; }
 nav.menu svg { width: 22px; height: 22px; }
@@ -151,3 +151,4 @@ nav.menu svg { width: 22px; height: 22px; }
 .list.inner .item > span { padding-right: 8px; }
 .rules .line { align-items: flex-start; gap: 12px; }
 .seg.three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.link-row { display: block; text-align: center; font-size: 13px; color: var(--sub); padding: 6px 0 2px; text-decoration: underline; text-underline-offset: 3px; }
