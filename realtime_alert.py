@@ -23,6 +23,9 @@
 #     - 자동 멈춤: 보낸 매수 알림을 실제로 샀다고 치고 1분봉으로 계속 따라가서(점검 작업과 같은 규칙),
 #                 3번 연속 손실이면 그 시장 매수 알림을 5일 쉬고 카톡으로 알려줌. 월요일 아침엔 지난주 실전 성적
 #  6) 손절 금액 고정: 손절가에 걸려도 정한 금액(기본: 종목 예산의 3%) 이상 안 잃도록 수량을 계산해서 알려줘요.
+#  7) 안정성 등급: 위 장치(시장·추세·눌림·변동성·실적·성적표)는 매수를 막지 않고 등급으로 붙여요.
+#     전부 통과 🟢높음 · 1~2개 부족 🟡보통 · 3개 이상 부족 🟠낮음. 🟢 알림이 3번 연속 손실이면 5일간 🟢→🟡.
+#     비밀값 "안정성_최소": "보통" 처럼 정하면 그보다 낮은 등급은 안 보내요. (막는 건 안전도 기준·하루 한 번·손절 한도만)
 
 import hashlib
 import json
@@ -84,6 +87,12 @@ TRADES_FILE = os.path.join(STATE_DIR, "trades.json")
 PAUSE_LOSSES, PAUSE_DAYS = 3, 5       # 실전 알림이 3번 연속 손실이면 그 시장 매수 알림 5일 쉼
 FILL_BARS_H, HOLD_DAYS, RUN_DAYS = 16, 14, 60   # 매수가 기다리는 시간(1시간봉 16개) · 1차 보유 14일 · 나머지 최대 60일
 FEE = 0.002                           # 사고팔 때 수수료·세금 합계
+GRADE_ICON = {"높음": "🟢", "보통": "🟡", "낮음": "🟠"}
+GRADE_RANK = {"낮음": 0, "보통": 1, "높음": 2}
+MIN_GRADE = S.get("안정성_최소", "낮음") if S.get("안정성_최소") in GRADE_RANK else "낮음"
+STAB_KEYS = [("시장", "시장_필터"), ("추세", "추세_필수"), ("눌림", "눌림_매수"), ("변동성", "변동성_필터"),
+             ("실적", "실적_피하기")]
+STAB_SHORT = {"시장": "시장약세", "추세": "추세약세", "눌림": "이미오름", "변동성": "변동큼", "실적": "실적임박"}
 
 
 def log(msg):
@@ -396,6 +405,20 @@ def guard_block(market, flags):
     return [GUARD_WHY[k] for k, ok in flags.items() if guard_on(market, GUARD_KEY[k]) and not ok]
 
 
+def stability(market, flags, card_ok, card_why, paused):
+    """안정성 등급 → (등급, 통과 수, 전체 수, 부족한 점 목록)"""
+    checks = [(STAB_SHORT[k], flags[k]) for k, key in STAB_KEYS if guard_on(market, key)]
+    if guard_on(market, "성적표"):
+        checks.append(("기록부족" if card_why == "과거 기록 부족" else "과거손실", card_ok))
+    misses = [why for why, ok in checks if not ok]
+    passed, total = len(checks) - len(misses), len(checks)
+    grade = "높음" if not misses else ("보통" if len(misses) <= 2 else "낮음")
+    if grade == "높음" and paused:
+        grade = "보통"
+        misses.append("🟢연속손실")
+    return grade, passed, total, misses
+
+
 def earnings_dates(t):
     """실적 발표일 목록 (지난 몇 년 + 예정, 'YYYY-MM-DD'). 미장 개별주만 있고, 못 받으면 빈 목록 → 막지 않음"""
     days = set()
@@ -555,28 +578,34 @@ def label(market, ticker, names):
     return f"{names[ticker]} {ticker}" if market == "us" else names[ticker]
 
 
-def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None):
+def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None, stab=None):
     when = trig["time"].astimezone(KST).strftime("%H:%M")
     p = lv["price"]
-    head = "🔴 매수" if side == "buy" else "🔵 매도"
     why = trig["reasons"][0] + (" 외" if len(trig["reasons"]) > 1 else "")
-    lines = [f"{head} · {label(market, ticker, names)} ({score}/10)",
-             f"{MARKET_NAME[market]} › {category} · {when} {why}"]
+    where = f"{MARKET_NAME[market]} › {category} · {when} {why}"
+    optional = []                         # 200자를 넘으면 아래쪽 줄부터 뺌
     if side == "buy":
-        if hist:
-            where = "" if hist["src"] == "종목" else f"({MARKET_KO[market]})"
-            lines.append(f"📈 과거{where} {hist['n']}번 승률{hist['win']:.0f}% 평균{hist['avg']:+.1f}%")
+        grade, passed, total, misses = stab or ("높음", 0, 0, [])
+        lines = [f"🔴 매수 · {label(market, ticker, names)}", where,
+                 f"안전도 {score}/10 · 안정성 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
         gap = (p / lv["buy"] - 1) * 100
         qty, loss = position(market, lv["buy"], lv["stop"])
         lines += [f"🔴 안전 매수가 {money(market, lv['buy'])} · {qty}" + (f" ({gap:.1f}% 위 대기)" if gap > 1 else " (지금 가능)"),
                   f"⛔ 손절가 {money(market, lv['stop'])}" + (f" → -{money(market, loss)}" if loss > 0 else "")]
         if guard_on(market, "반_매도"):
             trail = money(market, tick_round(market, TRAIL_ATR * lv["atr"]))
-            lines += [f"🔵 {money(market, lv['sell'])}에서 절반 매도",
-                      f"남은 절반: ⛔→매수가, 고점-{trail}면 매도"]
+            lines += [f"🔵 {money(market, lv['sell'])}에서 절반 매도, ⛔→매수가",
+                      f"나머지는 고점-{trail}에 매도"]
         else:
             lines += [f"🔵 안전 매도가 {money(market, lv['sell'])} (손익비 {lv['rr']:.1f})"]
+        if misses:
+            optional.append("⚠️ " + "·".join(misses))
+        if hist:
+            src = "" if hist["src"] == "종목" else f"({MARKET_KO[market]})"
+            optional.append(f"📈 과거{src} {hist['n']}번 승률{hist['win']:.0f}% 평균{hist['avg']:+.1f}%")
+        optional.append(f"현재가 {money(market, p)}")
     else:
+        lines = [f"🔵 매도 · {label(market, ticker, names)} ({score}/10)", where]
         near = lv.get("res_near")
         lines.append(f"현재가 {money(market, p)}")
         if near:
@@ -585,7 +614,6 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
         else:
             lines.append("🔵 보유 중이면 지금 매도")
         lines.append("재매수는 🔴 매수 알림 올 때만")
-    optional = [f"현재가 {money(market, p)}"] if side == "buy" else []   # 200자를 넘으면 아래쪽 줄부터 뺌
     if market == "kr":
         optional.append("⚠️ 국장 시세 지연 가능")
     missed = [n for n, ok in checks if not ok]
@@ -606,7 +634,8 @@ def summary_messages(market, items, now):
         lines.append(f"[{cat}]")
         for a in (x for x in items if x["category"] == cat):
             word = "🔴 매수" if a["side"] == "buy" else "🔵 매도"
-            lines.append(f"{word} {a['name']} {money(market, a['price'])}")
+            dot = f" {GRADE_ICON[a['grade']]}" if a.get("grade") else ""
+            lines.append(f"{word} {a['name']} {money(market, a['price'])}{dot}")
     lines.append("👇 종목별 안전가는 다음 메시지")
     return base.chunk(lines)
 
@@ -681,8 +710,8 @@ def save_book(book, now):
         json.dump(out, f)
 
 
-def track_start(book, market, t, lv, last_bar, now):
-    book["open"].append({"id": hid(t), "m": market, "ta": pd.Timestamp(now), "last": pd.Timestamp(last_bar),
+def track_start(book, market, t, lv, last_bar, now, grade="높음"):
+    book["open"].append({"id": hid(t), "m": market, "gr": grade, "ta": pd.Timestamp(now), "last": pd.Timestamp(last_bar),
                          "st": "wait", "seen": 0, "wait": FILL_BARS_H * 60,
                          "buy": float(lv["buy"]), "stop": float(lv["stop"]), "sell": float(lv["sell"]),
                          "atr": float(lv["atr"]), "half": guard_on(market, "반_매도")})
@@ -743,7 +772,7 @@ def track_update(book, market, t, m_raw):
             track_step(tr, ts, o, hi, lo, cl)
             tr["last"] = ts
             if tr["st"] == "done":
-                book["closed"].append({"m": market, "tx": ts, "ret": float(tr["ret"])})
+                book["closed"].append({"m": market, "tx": ts, "ret": float(tr["ret"]), "gr": tr.get("gr", "높음")})
             if tr["st"] in ("done", "skip", "expired"):
                 break
     book["open"] = [tr for tr in book["open"] if tr["st"] not in ("done", "skip", "expired")]
@@ -762,11 +791,15 @@ def pause_until(closed, now):
     return end if end is not None and now < end else None
 
 
+def green(book, market):
+    """자동 멈춤은 🟢(높음) 알림의 실전 결과로만 판단"""
+    return [c for c in book["closed"] if c["m"] == market and c.get("gr", "높음") == "높음"]
+
+
 def pause_notice(market, end):
-    return (f"🛑 {MARKET_NAME[market]} 매수 알림 {PAUSE_DAYS}일 쉼\n"
-            f"실전 알림이 {PAUSE_LOSSES}번 연속 손실이 났어요.\n"
-            f"{end.astimezone(KST):%m/%d %H:%M}에 다시 시작해요.\n"
-            "🔵 매도 알림은 계속 와요.")
+    return (f"🛑 {MARKET_NAME[market]} 🟢 매수 알림이 {PAUSE_LOSSES}번 연속 손실\n"
+            f"{PAUSE_DAYS}일 동안 🟢를 🟡로 낮춰서 보내요.\n"
+            f"{end.astimezone(KST):%m/%d %H:%M}에 원래대로 돌아와요.")
 
 
 def weekly_report(book, now):
@@ -778,24 +811,27 @@ def weekly_report(book, now):
     book["flags"]["report"] = week
     since = pd.Timestamp(now) - pd.Timedelta(days=7)
     lines = [f"📒 지난주 실전 알림 성적 ({k - timedelta(days=7):%m/%d}~{k - timedelta(days=1):%m/%d})",
-             "알림대로 안전 매수가에 샀다고 치고 계산"]
+             "알림대로 100만원씩 안전 매수가에 샀다고 치고 계산"]
     for market, cats in MARKETS.items():
         if not cats:
             continue
-        xs = [c["ret"] for c in book["closed"] if c["m"] == market and c["tx"] >= since]
-        if xs:
-            win = sum(r > 0 for r in xs)
-            lines.append(f"{MARKET_NAME[market]} {len(xs)}번 · 이익 {win} · 손실 {len(xs) - win}"
-                         f" → 100만원씩 {sum(xs) * 100:+.1f}만원")
-        else:
+        rows = [c for c in book["closed"] if c["m"] == market and c["tx"] >= since]
+        if not rows:
             lines.append(f"{MARKET_NAME[market]} 끝난 거래 없음")
+            continue
+        parts = []
+        for g in ("높음", "보통", "낮음"):
+            xs = [c["ret"] for c in rows if c.get("gr", "높음") == g]
+            if xs:
+                win = sum(r > 0 for r in xs)
+                parts.append(f"{GRADE_ICON[g]} {len(xs)}번(이익{win}) {sum(xs) * 100:+.1f}만")
+        lines.append(f"{MARKET_NAME[market]} " + " · ".join(parts))
     held = sum(tr["st"] in ("p1", "p2") for tr in book["open"])
     waiting = sum(tr["st"] == "wait" for tr in book["open"])
     lines.append(f"보유 중 {held}개 · 매수가 기다리는 중 {waiting}개")
     stopped = [MARKET_KO[mk] for mk in MARKETS
-               if guard_on(mk, "자동_멈춤") and pause_until([c for c in book["closed"] if c["m"] == mk],
-                                                          pd.Timestamp(now))]
-    lines.append("🛑 쉬는 시장: " + ", ".join(stopped) if stopped else "쉬는 시장 없음")
+               if guard_on(mk, "자동_멈춤") and pause_until(green(book, mk), pd.Timestamp(now))]
+    lines.append("🛑 🟢→🟡 낮춘 시장: " + ", ".join(stopped) if stopped else "🟢 연속 손실 없음")
     return base.chunk(lines)
 
 
@@ -820,7 +856,7 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
             except Exception as e:
                 log(f"{t}: 실전 기록 진행 실패 ({e})")
         if guard_on(market, "자동_멈춤"):
-            end = pause_until([c for c in book["closed"] if c["m"] == market], pd.Timestamp(now))
+            end = pause_until(green(book, market), pd.Timestamp(now))
             paused = end is not None
             if paused and book["flags"].get(f"pause|{market}") != end.isoformat():
                 book["flags"][f"pause|{market}"] = end.isoformat()
@@ -875,25 +911,26 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         score = sum(bool(ok) for _, ok in checks)
         key = f"tajum|{hid(t)}|{side}"
         word = "매수" if side == "buy" else "매도"
-        blocked = guard_block(market, guard_flags(d, lv["price"], mkt_ok, earn_ok)) if side == "buy" else []
-        if side == "buy" and not card_ok:
-            blocked.append(card_why)
-        if side == "buy" and paused:
-            blocked.append("실전 연속 손실로 쉬는 중")
-        if side == "buy" and position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
-            blocked.append("손절폭이 손실 한도보다 큼")
+        stab, blocked = None, []
+        if side == "buy":
+            stab = stability(market, guard_flags(d, lv["price"], mkt_ok, earn_ok), card_ok, card_why, paused)
+            if GRADE_RANK[stab[0]] < GRADE_RANK[MIN_GRADE]:
+                blocked.append(f"안정성 {stab[0]} (설정한 최소 {MIN_GRADE})")
+            if position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
+                blocked.append("손절폭이 손실 한도보다 큼")
         once = side == "buy" and guard_on(market, "하루_한번")
         if in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
         elif score < min_score(market):
             log(f"{t}: {word} 타점 있지만 안전도 {score}/10 → 알림 안 함")
         elif blocked:
-            log(f"{t}: {word} 타점 {score}/10 이지만 손실 방지로 막음 ({', '.join(blocked)})")
+            log(f"{t}: {word} 타점 {score}/10 이지만 막음 ({', '.join(blocked)})")
         else:
             alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
+                           "grade": stab[0] if stab else None,
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
-                                                hist)})
+                                                hist, stab)})
     if not found:
         log(f"{t}: 확정된 타점 없음")
 
@@ -941,7 +978,7 @@ def main():
                 base.send_kakao(token, a["msg"])
                 state[a["key"]] = now.isoformat()
                 if a["side"] == "buy":
-                    track_start(book, market, a["ticker"], a["lv"], a["bar"], now)
+                    track_start(book, market, a["ticker"], a["lv"], a["bar"], now, a.get("grade") or "높음")
                 log(f"알림 보냄 → {a['key']}")
                 time.sleep(1)
     save_state(state, now)

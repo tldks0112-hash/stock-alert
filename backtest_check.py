@@ -159,7 +159,7 @@ def simulate_buys(h, alerts, min_score, need=(), half=False, once=False):
         r = (exit_price / entry - 1) if first is None else (0.5 * first + 0.5 * exit_price) / entry - 1
         rets.append(r - FEE)
         trades.append({"ta": idx[i], "tx": idx[k], "ret": r - FEE, "open": still_open,
-                       "risk": (entry - stop) / entry})
+                       "risk": (entry - stop) / entry, "g": {g: a[g] for g in rt.GUARD_KEY}})
         busy = k
     return {"signals": signals, "filled": filled, "rets": rets, "trades": trades}
 
@@ -250,6 +250,30 @@ def apply_pause(trades):
     return taken
 
 
+def grade_trades(history, market):
+    """알림 전부(history: 종목별 거래)를 실시간과 같은 안정성 등급으로 나눔.
+    성적표는 그 거래 이전 기록만, 🟢 연속 손실 멈춤도 그 이전 🟢 결과만 봄 (미래 정보 없이)"""
+    pool = [(t, y) for t, ys in history.items() for y in ys if not y["open"]]
+    graded = []
+    for t, xs in history.items():
+        for x in xs:
+            hist_t = [y["ret"] for tt, y in pool if tt == t and y["tx"] < x["ta"]]
+            hist_m = [y["ret"] for _, y in pool if y["tx"] < x["ta"]]
+            ok, _, why = rt.card_judge(rt.card_stats(hist_t), rt.card_stats(hist_m))
+            grade = rt.stability(market, x["g"], ok, why, False)[0]
+            graded.append({**x, "gr": grade})
+    if rt.guard_on(market, "자동_멈춤"):
+        greens = []
+        for x in sorted(graded, key=lambda x: x["ta"]):
+            if x["gr"] != "높음":
+                continue
+            if rt.pause_until([y for y in greens if not y["open"]], x["ta"]) is not None:
+                x["gr"] = "보통"                                  # 멈춘 동안의 🟢는 🟡로
+            else:
+                greens.append(x)
+    return graded
+
+
 def make_card():
     """실시간 알림용 성적표: 종목별·시장 전체의 지난 2년 거래 성적 (종목 이름은 코드로)"""
     out, done, wanted = {"markets": {}, "earn": {}}, 0, 0
@@ -338,9 +362,11 @@ def main():
             buys[("⑦", k)] = [x["ret"] for x in taken]
         live = live_sid(market)
         live_trades = seven.get(cur, []) if live == "⑦" else [x for ts in six.get(cur, {}).values() for x in ts]
+        graded = grade_trades(hist[cur], market)
         results[market] = {"buys": buys, "sells": sells, "hold": hold, "strats": strats, "cur": cur,
                            "live": live, "live_trades": live_trades, "span": span, "ks": ks,
-                           "earn_ok": any(earn.values()) if earn else None, "old_trades": old_trades}
+                           "earn_ok": any(earn.values()) if earn else None, "old_trades": old_trades,
+                           "graded": graded}
 
     made = datetime.now(rt.KST)
     out_dir = os.environ.get("REPORT_DIR", "_site")
@@ -458,7 +484,8 @@ def build_messages(results):
                 else:
                     lines.append(f"{k}점 거래 없음{mark}")
             msgs += pack(lines, 200)
-        verdicts.append(verdict(name, rows, hold_total, cur, r["strats"], r["live"]))
+        msgs += pack(grade_lines(market, r), 200)
+        verdicts.append(verdict(name, rows, hold_total, cur, r["strats"], r["live"]) + grade_verdict(r))
 
     blocks = ["🧪 ⭐ 안정성 검사 (100만원씩)\n앞1년·뒤1년 둘 다 수익이면 ✅"]
     blocks += ["\n".join(stability_lines(market, r)) for market, r in results.items()]
@@ -486,11 +513,43 @@ def notes(results):
     return out + ["과거 성적이 미래 수익을 보장하진 않아요"]
 
 
+def grade_stats(r):
+    out = {}
+    for g in ("높음", "보통", "낮음"):
+        x = np.array([t["ret"] for t in r["graded"] if t["gr"] == g])
+        out[g] = {"n": len(x), "win": int((x > 0).sum()), "total": x.sum() * UNIT} if len(x) else None
+    return out
+
+
+def grade_lines(market, r):
+    st = grade_stats(r)
+    lines = [f"{rt.MARKET_NAME[market]} 안정성 등급별 2년 손익", f"({r['cur']}점 이상 알림 전부 · 100만원씩)"]
+    for g, x in st.items():
+        icon = rt.GRADE_ICON[g]
+        if x:
+            lines.append(f"{icon}{g} {won(x['total'])} ({x['win'] / x['n'] * 100:.0f}%·{x['n']}번)")
+        else:
+            lines.append(f"{icon}{g} 거래 없음")
+    return lines
+
+
+def grade_verdict(r):
+    """결론에 붙는 한 줄: 🟢만 따라갔을 때 vs 전부 따라갔을 때"""
+    st = grade_stats(r)
+    allx = [t["ret"] for t in r["graded"]]
+    if not allx:
+        return ""
+    g = st["높음"]
+    green = f"🟢만 {won(g['total'])}({g['n']}번)" if g else "🟢 거래 없음"
+    return f"\n → {green} · 전부 {won(sum(allx) * UNIT)}({len(allx)}번)"
+
+
 def all_verdicts(results):
     out = []
     for market, r in results.items():
         rows, hold_total, _ = market_result(r)
-        out.append(verdict(rt.MARKET_NAME[market], rows, hold_total, r["cur"], r["strats"], r["live"]))
+        out.append(verdict(rt.MARKET_NAME[market], rows, hold_total, r["cur"], r["strats"], r["live"])
+                   + grade_verdict(r))
     return out
 
 
