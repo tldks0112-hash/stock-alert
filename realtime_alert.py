@@ -23,7 +23,7 @@
 #     - 자동 멈춤: 보낸 매수 알림을 실제로 샀다고 치고 1분봉으로 계속 따라가서(점검 작업과 같은 규칙),
 #                 3번 연속 손실이면 그 시장 매수 알림을 5일 쉬고 카톡으로 알려줌. 월요일 아침엔 지난주 실전 성적
 #  6) 손절 금액 고정: 손절가에 걸려도 정한 금액(기본: 종목 예산의 3%) 이상 안 잃도록 수량을 계산해서 알려줘요.
-#  7) 안정성 등급: 위 장치(시장·추세·눌림·변동성·실적·성적표)는 매수를 막지 않고 등급으로 붙여요.
+#  7) 안전 점검 등급: 위 장치(시장·추세·눌림·변동성·실적·성적표)는 매수를 막지 않고 등급으로 붙여요.
 #     전부 통과 🟢높음 · 1~2개 부족 🟡보통 · 3개 이상 부족 🟠낮음. 🟢 알림이 3번 연속 손실이면 5일간 🟢→🟡.
 #     비밀값 "안정성_최소": "보통" 처럼 정하면 그보다 낮은 등급은 안 보내요. (막는 건 안전도 기준·하루 한 번·손절 한도만)
 
@@ -128,21 +128,49 @@ def _hm(ts, market):
     return t.weekday(), t.hour * 60 + t.minute
 
 
+# 휴장일 — 미장: NYSE 공식 발표(2026·2027) / 국장: 2026년 남은 휴장일 + 2027년 관공서 공휴일 기준(거래소 공식 발표 전)
+HOLIDAYS = {
+    "us": {"2026-11-26": "추수감사절", "2026-12-25": "크리스마스",
+           "2027-01-01": "새해", "2027-01-18": "마틴 루서 킹 데이", "2027-02-15": "대통령의 날", "2027-03-26": "성금요일",
+           "2027-05-31": "메모리얼 데이", "2027-06-18": "준틴스", "2027-07-05": "독립기념일", "2027-09-06": "노동절",
+           "2027-11-25": "추수감사절", "2027-12-24": "크리스마스"},
+    "kr": {"2026-12-25": "성탄절", "2026-12-31": "연말 휴장",
+           "2027-01-01": "신정", "2027-02-08": "설 연휴", "2027-02-09": "설 대체휴일", "2027-03-01": "삼일절",
+           "2027-05-03": "노동절 대체휴일", "2027-05-05": "어린이날", "2027-05-13": "부처님오신날",
+           "2027-07-19": "제헌절 대체휴일", "2027-08-16": "광복절 대체휴일", "2027-09-14": "추석 연휴",
+           "2027-09-15": "추석", "2027-09-16": "추석 연휴", "2027-10-04": "개천절 대체휴일",
+           "2027-10-11": "한글날 대체휴일", "2027-12-27": "성탄절 대체휴일", "2027-12-31": "연말 휴장"},
+}
+EARLY_CLOSE = {"us": {"2026-11-27": 780, "2026-12-24": 780, "2027-11-26": 780}}   # 오후 1시 조기 마감
+NORMAL_HOURS = {"us": (570, 960), "kr": (540, 930)}
+
+
+def session(market, ts):
+    """그날 정규장 (시작 분, 마감 분) — 주말·휴장일이면 None"""
+    t = ts.astimezone(TZ[market])
+    day = t.date().isoformat()
+    if t.weekday() >= 5 or day in HOLIDAYS.get(market, {}):
+        return None
+    start, close = NORMAL_HOURS[market]
+    return start, EARLY_CLOSE.get(market, {}).get(day, close)
+
+
 def is_open(market, now):
     if market == "crypto":
         return True
-    wd, hm = _hm(now, market)
-    if wd >= 5:
-        return False
-    return (570 <= hm <= 960) if market == "us" else (540 <= hm <= 930)
+    s = session(market, now)
+    return bool(s) and s[0] <= _hm(now, market)[1] <= s[1]
 
 
 def calm_time(market, ts):
     """장 시작 직후 15분, 마감 직전 10분(국장은 동시호가 포함 15분)은 출렁임이 커서 타점으로 안 씀"""
     if market == "crypto":
         return True
-    _, hm = _hm(ts, market)
-    return (585 <= hm <= 950) if market == "us" else (555 <= hm <= 915)
+    s = session(market, ts)
+    if not s:
+        return False
+    hm = _hm(ts, market)[1]
+    return s[0] + 15 <= hm <= s[1] - (10 if market == "us" else 15)
 
 
 # ---------- 데이터 ----------
@@ -413,7 +441,7 @@ def guard_block(market, flags):
 
 
 def stability(market, flags, card_ok, card_why, paused):
-    """안정성 등급 → (등급, 통과 수, 전체 수, 부족한 점 목록)"""
+    """안전 점검 등급 → (등급, 통과 수, 전체 수, 부족한 점 목록)"""
     checks = [(STAB_SHORT[k], flags[k]) for k, key in STAB_KEYS if guard_on(market, key)]
     if guard_on(market, "성적표"):
         checks.append(("기록부족" if card_why == "과거 기록 부족" else "과거손실", card_ok))
@@ -594,7 +622,7 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
     if side == "buy":
         grade, passed, total, misses = stab or ("높음", 0, 0, [])
         lines = [f"🔴 매수 · {label(market, ticker, names)}", where,
-                 f"신호 점수 {score}/10 · 안정성 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
+                 f"신호 점수 {score}/10 · 점검 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
         gap = (p / lv["buy"] - 1) * 100
         qty, loss = position(market, lv["buy"], lv["stop"])
         lines += [f"🔴 매수 기준가 {money(market, lv['buy'])} · {qty}" + (f" ({gap:.1f}% 위 대기)" if gap > 1 else " (지금 가능)"),
@@ -958,13 +986,26 @@ def morning_brief(book, state, card, now):
     a = out["alerts"]
     lines.append(f"새 타점(24시간) 매수 {a['buy']}·매도 {a['sell']}")
     cl = out["closed"]
+    rec = f"실전 기록 보유 {out['held']}·대기 {out['waiting']}"
     if cl["n"]:
-        lines.append(f"끝난 거래 {cl['n']}번 이익 {cl['wins']} · {cl['sum']:+.1f}만원")
-    lines.append(f"보유 {out['held']} · 매수 대기 {out['waiting']}")
+        rec += f" · 끝남 {cl['n']}번 {cl['sum']:+.1f}만원"
+    lines.append(rec)
     if out["earn"]:
         lines.append("실적 예정 " + ", ".join(f"{e['name']} {e['day'][5:].replace('-', '/')}" for e in out["earn"][:4])
                      + (f" 외 {len(out['earn']) - 4}" if len(out["earn"]) > 4 else ""))
     return out, lines
+
+
+def brief_push(data, lines):
+    """아침 브리핑 푸시 한 줄 요약: 지수 등락 + 시장 흐름 + 새 타점 수"""
+    by = {x["name"]: x for x in data["idx"]}
+    parts = [f"{n} {by[n]['chg']:+.1f}%" for n in ("S&P500", "나스닥", "코스피", "비트코인") if n in by]
+    flow = data.get("flow") or {}
+    if flow:
+        parts.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'좋음' if ok else '약함'}" for m, ok in flow.items()))
+    a = data["alerts"]
+    parts.append(f"새 타점 매수 {a['buy']}·매도 {a['sell']}")
+    return {"title": lines[0], "body": " · ".join(parts), "url": "./#/", "tag": "brief-" + data["day"]}
 
 
 def kakao_chunks(lines, limit=200):
@@ -1063,7 +1104,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             flags = {**gf, "성적": bool(card_ok)}
             stab = stability(market, gf, card_ok, card_why, paused)
             if GRADE_RANK[stab[0]] < GRADE_RANK[MIN_GRADE]:
-                blocked.append(f"안정성 {stab[0]} (설정한 최소 {MIN_GRADE})")
+                blocked.append(f"점검 {stab[0]} (설정한 최소 {MIN_GRADE})")
             if position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
                 hard.append("손절폭이 손실 한도보다 큼")
         once = side == "buy" and guard_on(market, "하루_한번")
@@ -1119,7 +1160,7 @@ def app_item(a):
                    trail=float(tick_round(market, TRAIL_ATR * lv["atr"])), half=guard_on(market, "반_매도"),
                    hist=a.get("hist"))
         push = {"title": f"🔴 매수 · {title}",
-                "body": f"안정성 {grade} {passed}/{total} · 매수 {money(market, lv['buy'])} · 손절 {money(market, lv['stop'])}"}
+                "body": f"점검 {grade} {passed}/{total} · 매수 {money(market, lv['buy'])} · 손절 {money(market, lv['stop'])}"}
     else:
         near = lv.get("res_near")
         row.update(rebound=float(near) if near else None)
@@ -1216,11 +1257,13 @@ def main():
     book["open"] = [tr for tr in book["open"] if tr["ta"] >= old]
     notices += weekly_report(book, now)
     brief = morning_brief(book, state, card, now)
+    brief_pushed = 0
     if brief and app_bridge.enabled():
         try:
             app_bridge.put_kv("brief", brief[0])
+            brief_pushed = app_bridge.push_brief(brief_push(brief[0], brief[1]), now)
         except Exception as e:
-            log(f"아침 브리핑 앱 저장 실패 ({app_bridge.why(e)})")
+            log(f"아침 브리핑 앱 저장·푸시 실패 ({app_bridge.why(e)})")
 
     if any(a["kakao"] for a in alerts) or notices or brief:
         token = base.get_access_token()
@@ -1270,7 +1313,7 @@ def main():
         else:
             tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
     mode = f" · 카톡 {KAKAO_PRESET}" if KAKAO_RULES else " · 카톡 기존 방식"
-    mode += " · 아침 브리핑" if brief else ""
+    mode += f" · 아침 브리핑 (푸시 {brief_pushed}건)" if brief else ""
     print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}{mode}")
 
 

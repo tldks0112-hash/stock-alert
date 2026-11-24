@@ -2,7 +2,7 @@
 # 최근 1시간봉 730거래일치(국장·미장 약 3년, 코인 약 2년)로, 실시간 알림과 똑같은 안전가·안전도 10점 계산을 돌려요.
 # 손실 방지 장치(시장 필터·추세 필수·눌림 매수·반 매도)를 하나씩 켰을 때, 전부 켰을 때,
 # 그리고 '성적표'(과거에 수익 난 자리만)와 '연속 손실 자동 멈춤'까지 켰을 때를 비교하고,
-# 새 알림 설정이 기간 앞 절반·뒤 절반 모두 통했는지(안정성)도 같이 봐요. 결과는
+# 새 알림 설정이 기간 앞 절반·뒤 절반 모두 통했는지(기간 검사)도 같이 봐요. 결과는
 # 돈(만원)으로 바꾸고, 그냥 들고 있었을 때와 나란히 카톡으로만 보내요.
 # 공개 실행 기록에는 종목 수만 남겨요.
 # 표·그래프로 된 결과 페이지 파일도 만들어요 (_site 폴더, 지금은 카톡 버튼과 연결 안 함).
@@ -252,7 +252,7 @@ def apply_pause(trades):
 
 
 def grade_trades(history, market):
-    """알림 전부(history: 종목별 거래)를 실시간과 같은 안정성 등급으로 나눔.
+    """알림 전부(history: 종목별 거래)를 실시간과 같은 안전 점검 등급으로 나눔.
     성적표는 그 거래 이전 기록만, 🟢 연속 손실 멈춤도 그 이전 🟢 결과만 봄 (미래 정보 없이)"""
     pool = [(t, y) for t, ys in history.items() for y in ys if not y["open"]]
     graded = []
@@ -511,7 +511,7 @@ def build_messages(results):
         msgs += pack(grade_lines(market, r), 200)
         verdicts.append(verdict(name, rows, hold_total, cur, r["strats"], r["live"]) + grade_verdict(r))
 
-    blocks = ["🧪 ⭐ 안정성 검사 (100만원씩)\n기간 앞 절반·뒤 절반 둘 다 수익이면 ✅"]
+    blocks = ["🧪 ⭐ 기간 검사 (100만원씩)\n기간 앞 절반·뒤 절반 둘 다 수익이면 ✅"]
     blocks += ["\n".join(stability_lines(market, r)) for market, r in results.items()]
     msgs += pack(blocks, 200)                     # 시장별 묶음은 쪼개지지 않게
 
@@ -547,7 +547,7 @@ def grade_stats(r):
 
 def grade_lines(market, r):
     st = grade_stats(r)
-    lines = [f"{rt.MARKET_NAME[market]} 안정성 등급별 {years(r['span'])} 손익", f"({r['cur']}점 이상 알림 전부 · 100만원씩)"]
+    lines = [f"{rt.MARKET_NAME[market]} 점검 등급별 {years(r['span'])} 손익", f"({r['cur']}점 이상 알림 전부 · 100만원씩)"]
     for g, x in st.items():
         icon = rt.GRADE_ICON[g]
         if x:
@@ -717,7 +717,7 @@ def market_section(market, r):
     out.append("</table>")
 
     st = stability_lines(market, r)
-    out.append('<h3>🧪 안정성 검사</h3><ul class="st">' + "".join(f"<li>{e(x.strip())}</li>" for x in st) + "</ul>")
+    out.append('<h3>🧪 기간 검사</h3><ul class="st">' + "".join(f"<li>{e(x.strip())}</li>" for x in st) + "</ul>")
     v = verdict(name, rows, hold_total, cur, r["strats"], live).split("\n")
     out.append('<div class="verdict">' + "<br>".join(e(x.strip()) for x in v) + "</div></section>")
     return "".join(out)

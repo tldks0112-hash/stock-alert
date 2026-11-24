@@ -187,6 +187,34 @@ def send_push(subs, items, now):
     return sent, len(gone)
 
 
+def push_brief(push, now):
+    """아침 브리핑 푸시: 알림을 켠 휴대폰 중 브리핑을 끄지 않은 곳만 (방해 금지 시간이면 건너뜀) → 보낸 수"""
+    if not enabled() or not VAPID_PRIVATE:
+        return 0
+    from pywebpush import WebPushException, webpush
+    if now.astimezone(KST).hour < 7:
+        return 0
+    sent, gone = 0, []
+    for s in get_subs():
+        if (s.get("prefs") or {}).get("brief", True) is False:
+            continue
+        try:
+            webpush(subscription_info=s["sub"], data=json.dumps(push, ensure_ascii=False),
+                    vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": _subject()}, ttl=3 * 3600, timeout=10)
+            sent += 1
+        except WebPushException as e:
+            if getattr(getattr(e, "response", None), "status_code", None) in (404, 410):
+                gone.append(s["endpoint"])
+        except Exception:
+            pass
+    for ep in gone:
+        try:
+            delete_sub(ep)
+        except Exception:
+            pass
+    return sent
+
+
 def publish(items, now):
     """items: [(알림 행, 푸시 내용)] → 저장하고 푸시 (실패해도 카톡 알림은 계속)"""
     if not enabled() or not items:
