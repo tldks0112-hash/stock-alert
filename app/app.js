@@ -18,7 +18,8 @@
     ['과거 성적은 미래 수익을 보장하지 않아요', '성적표와 시뮬레이션은 지난 데이터로 계산한 결과예요. 서비스 제공자는 금융투자업자가 아니에요.']
   ];
   var S = { feed: null, loading: false, error: '', tab: 'all', rec: 'sim', agree: [false, false, false, false],
-    codeErr: '', busy: false, pushHelp: false };
+    codeErr: '', busy: false, pushHelp: false, open: null };
+  var OPEN_CODE = 'OPEN';   // 서버에 이 코드가 켜져 있으면 초대 코드 없이 바로 들어가요
 
   // ---------- 작은 도구 ----------
   var store = {
@@ -96,7 +97,10 @@
     return rpc('app_feed', { p_code: code(), p_days: 3 }).then(function (f) {
       S.feed = f; S.error = '';
     }).catch(function (e) {
-      if (e.invalid) { store.del(K.code); S.codeErr = '초대 코드가 더 이상 쓸 수 없어요. 새 코드를 넣어 주세요.'; }
+      if (e.invalid) {
+        S.open = code() === OPEN_CODE ? false : null;
+        store.del(K.code); S.codeErr = '초대 코드가 더 이상 쓸 수 없어요. 새 코드를 넣어 주세요.';
+      }
       else S.error = '불러오지 못했어요. 인터넷 연결을 확인하고 새로고침을 눌러 주세요.';
     }).then(function () { S.loading = false; render(); });
   }
@@ -207,6 +211,18 @@
       '<input id="code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="예: ABCD-1234-EFGH" maxlength="40" required>' +
       (S.codeErr ? '<p class="err" role="alert">' + esc(S.codeErr) + '</p>' : '') +
       '<button class="btn" type="submit"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? '확인하는 중…' : '확인') + '</button></form></main>';
+  }
+  function pageWait() {
+    return '<main class="welcome"><div style="display:flex;flex-direction:column;gap:14px"><div class="logo">' + ICON.logo + '</div>' +
+      '<h1>준비하는 중…</h1><p class="lead">잠시만 기다려 주세요.</p></div></main>';
+  }
+  function checkOpen() {
+    S.open = 'checking';
+    rpc('app_check', { p_code: OPEN_CODE }).then(function (ok) {
+      if (ok === true) { store.set(K.code, OPEN_CODE); S.open = true; S.feed = null; loadFeed(); }
+      else S.open = false;
+    }).catch(function () { S.open = false; S.codeErr = '연결하지 못했어요. 인터넷 연결을 확인하고 앱을 다시 열어 주세요.'; })
+      .then(function () { render(); });
   }
   function pageHome() {
     var f = S.feed, all = (f && f.alerts) || [];
@@ -340,7 +356,7 @@
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
       '<details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">개인정보 안내</summary><p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--sub)">이름·전화번호·이메일은 받지 않아요. 푸시 알림을 켜면 이 휴대폰의 알림 주소와 알림 설정만 저장하고, 알림을 끄면 지워요. 초대 코드는 이 휴대폰에만 저장돼요.</p></details>' +
-      (LIVE && c ? '<div class="line"><span>초대 코드 ' + esc(c.slice(0, 4)) + '-••••</span><button class="btn ghost" style="width:auto;min-height:40px;padding:0 14px;font-size:13px" data-act="logout">코드 지우기</button></div>' : '') + '</section>' +
+      (LIVE && c && c !== OPEN_CODE ? '<div class="line"><span>초대 코드 ' + esc(c.slice(0, 4)) + '-••••</span><button class="btn ghost" style="width:auto;min-height:40px;padding:0 14px;font-size:13px" data-act="logout">코드 지우기</button></div>' : '') + '</section>' +
       '<p class="foot-note">투자 참고용 정보이며 투자자문이 아니에요. 서비스 제공자는 금융투자업자가 아니며, 개별 상담과 자금 운용은 하지 않아요.</p></main>' + menu('settings');
   }
 
@@ -349,7 +365,10 @@
   function render() {
     var r = route(), html;
     if (!store.get(K.consent, false)) html = pageWelcome();
-    else if (LIVE && !code()) html = pageCode();
+    else if (LIVE && !code()) {
+      if (S.open === false) html = pageCode();
+      else { html = pageWait(); if (S.open === null) setTimeout(checkOpen, 0); }
+    }
     else if (r.p === 'alert') html = pageDetail(r.id);
     else if (r.p === 'record') html = pageRecord();
     else if (r.p === 'settings') html = pageSettings();
@@ -360,7 +379,7 @@
     render.last = location.hash;
   }
   var ACT = {
-    start: function () { store.set(K.consent, true); render(); if (!LIVE) loadFeed(); },
+    start: function () { store.set(K.consent, true); render(); if (!LIVE || code()) loadFeed(); },
     tab: function (t) { S.tab = t.dataset.v; render(); },
     rec: function (t) { S.rec = t.dataset.v; render(); },
     span: function (t) { S.liveSpan = t.dataset.v; render(); },
@@ -369,7 +388,7 @@
     sell: function () { var p = prefs(); p.sell = !p.sell; savePrefs(p); },
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
-    logout: function () { if (pushOn()) disablePush(); store.del(K.code); S.feed = null; location.hash = '#/'; render(); }
+    logout: function () { if (pushOn()) disablePush(); store.del(K.code); S.feed = null; S.open = false; location.hash = '#/'; render(); }
   };
   ['kr', 'us', 'crypto'].forEach(function (m) {
     ACT['mk-' + m] = function () {
