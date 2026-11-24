@@ -16,7 +16,7 @@
 #     - 반 매도: 안전 매도가에서 절반 팔고, 나머지는 손절가를 매수가로 올려 큰 상승을 따라감
 #     - 하루 한번: 같은 종목 매수 알림은 하루 한 번만
 #     - 변동성 필터: 종목이 평소보다 심하게 출렁일 때(1년 중 상위 20%)는 매수 알림 안 함
-#     - 성적표: 지난 2년 그 종목의 알림대로 (같은 파는 방법으로) 거래했을 때 평균 수익이 나고(+0.3% 이상)
+#     - 성적표: 과거 그 종목의 알림대로 (같은 파는 방법으로) 거래했을 때 평균 수익이 나고(+0.3% 이상)
 #               번 돈이 잃은 돈의 1.2배 이상이었던 종목만 매수 알림. 손실 났던 종목은 추천도 안 함
 #               (종목 기록이 6번 미만이면 같은 시장 전체 기록으로 판단, 하루 한 번 자동 갱신)
 #     - 실적 피하기: 미장 개별주는 실적 발표 10일 전부터 매수 알림 안 함 (발표 다음 날 갭으로 손절이 소용없어서)
@@ -70,6 +70,7 @@ NY = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")
 MARKETS = {"kr": KR_STOCKS, "us": US_STOCKS, "crypto": COINS}          # 카톡도 이 순서로 와요
 MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙 코인"}
+BRIEF = S.get("아침_브리핑", True)            # 매일 아침 8시쯤(일요일 빼고) 카톡 한 통 + 앱 첫 화면 카드
 KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요약만, 자세한 기준가는 앱에서 / False: 예전처럼 종목별 자세히
 APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
 KAKAO_PRESET = str(S.get("카톡_조건", "추천"))   # 카톡도 앱의 추천 설정대로 ("안정"/"기회"도 가능, "기존"이면 예전 방식)
@@ -513,7 +514,7 @@ def _age(card, key, now):
 
 
 def ensure_card(now):
-    """성적표가 없거나 오래됐으면 지난 2년 데이터로 새로 만듦 (하루 한 번쯤, 1~2분 걸림)"""
+    """성적표가 없거나 오래됐으면 과거 데이터로 새로 만듦 (하루 한 번쯤, 1~2분 걸림)"""
     if not any(cats and (guard_on(mk, "성적표") or (mk == "us" and guard_on(mk, "실적_피하기")))
                for mk, cats in MARKETS.items()):
         return None
@@ -867,6 +868,118 @@ def weekly_report(book, now):
     return base.chunk(lines)
 
 
+# ---------- 아침 브리핑 ----------
+
+BRIEF_IDX = [("S&P500", "^GSPC"), ("나스닥", "^IXIC"), ("코스피", "^KS11"), ("원/달러", "KRW=X")]
+WEEKDAY_KO = "월화수목금토일"
+
+
+def last_change(df):
+    """일봉 마지막 두 개로 등락률(%) · 마지막 값 · 그날 날짜"""
+    c = df["Close"].dropna() if df is not None else None
+    if c is None or len(c) < 2:
+        return None
+    return {"chg": round(float(c.iloc[-1] / c.iloc[-2] - 1) * 100, 2), "last": round(float(c.iloc[-1]), 2),
+            "date": pd.Timestamp(c.index[-1]).date().isoformat()}
+
+
+def morning_brief(book, state, card, now):
+    """매일 아침(한국 8시 이후 첫 실행, 일요일 빼고) 한 번: 밤사이 시장 · 시장 흐름 · 지난 24시간 타점과 실전 결과 · 이번 주 실적.
+    돌려주는 값: (앱에 보낼 내용, 카톡 줄 목록) 또는 None"""
+    k = now.astimezone(KST)
+    day = k.date().isoformat()
+    if not BRIEF or k.hour < 8 or k.weekday() == 6 or book["flags"].get("brief") == day:
+        return None
+    book["flags"]["brief"] = day
+    out = {"at": now.isoformat(), "day": day, "idx": [], "flow": {}, "alerts": {"buy": 0, "sell": 0},
+           "closed": {"n": 0, "wins": 0, "sum": 0.0}, "held": 0, "waiting": 0, "earn": []}
+    try:
+        d = fetch_many([t for _, t in BRIEF_IDX], "10d", "1d")
+        for name, t in BRIEF_IDX:
+            x = last_change(d.get(t))
+            if x:
+                out["idx"].append({"name": name, **x})
+        h = fetch_many(["BTC-KRW"], "3d", "60m").get("BTC-KRW")
+        c = h["Close"].dropna() if h is not None else []
+        if len(c) > 25:                                  # 코인은 24시간 전과 비교
+            out["idx"].append({"name": "비트코인", "chg": round(float(c.iloc[-1] / c.iloc[-25] - 1) * 100, 2),
+                               "last": round(float(c.iloc[-1])), "date": day, "h24": True})
+    except Exception as e:
+        log(f"아침 브리핑: 지수 받기 실패 ({e})")
+    try:
+        mks = [m for m, cats in MARKETS.items() if cats]
+        idx = fetch_many([INDEX[m] for m in mks], "2y", "1d")
+        for m in mks:
+            if idx.get(INDEX[m]) is not None:
+                out["flow"][m] = market_ok(m, idx.get(INDEX[m]), now)
+    except Exception as e:
+        log(f"아침 브리핑: 시장 흐름 실패 ({e})")
+    since = now - timedelta(hours=24)
+    for key, v in state.items():
+        if key.startswith("app|"):
+            try:
+                if datetime.fromisoformat(v) >= since:
+                    out["alerts"]["buy" if key.endswith("|buy") else "sell"] += 1
+            except (TypeError, ValueError):
+                pass
+    rows = [c for c in book["closed"] if c["tx"] >= pd.Timestamp(since)]
+    out["closed"] = {"n": len(rows), "wins": sum(c["ret"] > 0 for c in rows),
+                     "sum": round(sum(c["ret"] for c in rows) * 100, 2)}
+    out["held"] = sum(tr["st"] in ("p1", "p2") for tr in book["open"])
+    out["waiting"] = sum(tr["st"] == "wait" for tr in book["open"])
+    earn = (card or {}).get("earn", {})
+    for cat, group in (MARKETS.get("us") or {}).items():
+        for t, name in group.items():
+            for s_ in earn.get(hid(t), []) or []:
+                try:
+                    gap = (date.fromisoformat(s_) - k.date()).days
+                except ValueError:
+                    continue
+                if 0 <= gap <= 7:
+                    out["earn"].append({"name": name, "day": s_})
+                    break
+    out["earn"].sort(key=lambda x: x["day"])
+
+    # 카톡 줄
+    lines = [f"☀️ 아침 브리핑 {k:%m/%d}({WEEKDAY_KO[k.weekday()]})"]
+    by = {x["name"]: x for x in out["idx"]}
+
+    def pc(name):
+        x = by.get(name)
+        return f"{name} {x['chg']:+.1f}%" if x else None
+    for group in (("S&P500", "나스닥"), ("코스피", "비트코인")):
+        parts = [p for p in (pc(n) for n in group) if p]
+        if parts:
+            lines.append(" · ".join(parts))
+    if "원/달러" in by:
+        lines.append(f"환율 {by['원/달러']['last']:,.0f}원 ({by['원/달러']['chg']:+.1f}%)")
+    if out["flow"]:
+        lines.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'좋음' if ok else '약함'}" for m, ok in out["flow"].items()))
+    a = out["alerts"]
+    lines.append(f"새 타점(24시간) 매수 {a['buy']}·매도 {a['sell']}")
+    cl = out["closed"]
+    if cl["n"]:
+        lines.append(f"끝난 거래 {cl['n']}번 이익 {cl['wins']} · {cl['sum']:+.1f}만원")
+    lines.append(f"보유 {out['held']} · 매수 대기 {out['waiting']}")
+    if out["earn"]:
+        lines.append("실적 예정 " + ", ".join(f"{e['name']} {e['day'][5:].replace('-', '/')}" for e in out["earn"][:4])
+                     + (f" 외 {len(out['earn']) - 4}" if len(out["earn"]) > 4 else ""))
+    return out, lines
+
+
+def kakao_chunks(lines, limit=200):
+    """카톡 200자 제한(이모지는 2자로 셈)에 맞춰 줄 단위로 나눔"""
+    msgs, cur = [], []
+    for ln in lines:
+        if cur and u16len("\n".join(cur + [ln])) > limit:
+            msgs.append("\n".join(cur))
+            cur = []
+        cur.append(ln)
+    if cur:
+        msgs.append("\n".join(cur))
+    return msgs
+
+
 # ---------- 실행 ----------
 
 def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=None, notices=None):
@@ -1102,9 +1215,18 @@ def main():
     old = pd.Timestamp(now) - pd.Timedelta(days=RUN_DAYS + 20)
     book["open"] = [tr for tr in book["open"] if tr["ta"] >= old]
     notices += weekly_report(book, now)
+    brief = morning_brief(book, state, card, now)
+    if brief and app_bridge.enabled():
+        try:
+            app_bridge.put_kv("brief", brief[0])
+        except Exception as e:
+            log(f"아침 브리핑 앱 저장 실패 ({app_bridge.why(e)})")
 
-    if any(a["kakao"] for a in alerts) or notices:
+    if any(a["kakao"] for a in alerts) or notices or brief:
         token = base.get_access_token()
+        for msg in kakao_chunks(brief[1]) if brief else []:
+            send_short(token, msg)
+            time.sleep(1)
         for msg in notices:
             base.send_kakao(token, msg)
             time.sleep(1)
@@ -1148,6 +1270,7 @@ def main():
         else:
             tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
     mode = f" · 카톡 {KAKAO_PRESET}" if KAKAO_RULES else " · 카톡 기존 방식"
+    mode += " · 아침 브리핑" if brief else ""
     print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}{mode}")
 
 
