@@ -166,3 +166,41 @@ nav.menu svg { width: 22px; height: 22px; }
 .mk-row .line b { color: var(--ink); }
 .mk-row .mk { display: inline-block; min-width: 30px; margin-right: 4px; }
 .warn-t { color: var(--low); }
+/* 장 시간 */
+.hours { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 2px 0; font-size: 12px; color: var(--mut); }
+.hours span { display: inline-flex; align-items: center; gap: 5px; }
+.hours i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.hours i.on { background: #1BA75B; }
+/* 아침 브리핑 */
+.brief .idx { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.brief .idx > div { background: var(--soft); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.brief .idx span { font-size: 12px; color: var(--mut); } .brief .idx small { font-size: 10px; }
+.brief .idx b { font-size: 15px; color: var(--ink); }
+.brief .line b { color: var(--ink); font-weight: 600; }
+.brief .fl-ok { color: var(--hi) !important; } .brief .fl-weak { color: var(--low) !important; }
+.x { border: 0; background: transparent; color: var(--mut); padding: 4px; margin: -4px -4px -4px 2px; cursor: pointer; vertical-align: middle; min-width: 28px; min-height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+/* 내 매매일지 */
+.mine { margin-left: 6px; font-size: 11px; font-weight: 700; color: #fff; background: #1BA75B; border-radius: 6px; padding: 2px 6px; vertical-align: 2px; }
+.card.held { box-shadow: inset 0 0 0 2px #1BA75B; }
+section.held { box-shadow: inset 0 0 0 2px #1BA75B; }
+.jform { display: flex; flex-direction: column; gap: 10px; }
+.jform label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--sub); }
+.jform input { min-height: 48px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 14px; font: inherit; font-size: 17px; color: var(--ink); background: #fff; }
+.jform input:focus { outline: none; border-color: var(--ink); }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.two .btn { min-height: 46px; font-size: 14px; }
+.jrow .name { font-size: 15px; color: var(--ink); }
+.jdone { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--chip); }
+.jdone:last-child { border-bottom: 0; }
+.jdone > span { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.jdone > span:nth-child(2) { flex: 0 0 auto; }
+.jdone b { font-size: 14px; } .jdone small { font-size: 12px; color: var(--mut); }
+/* 사용법 · 설정 링크 */
+.guide h2 { font-size: 16px; }
+.guide p, .guide li { margin: 0; font-size: 14px; line-height: 1.65; color: var(--sub); }
+.guide ul, .guide ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.item-link { display: flex; align-items: center; justify-content: space-between; min-height: 64px; color: var(--ink); text-decoration: none; }
+.item-link > span:first-child { display: flex; flex-direction: column; gap: 2px; }
+.item-link b { font-size: 15px; font-weight: 600; } .item-link small { font-size: 12px; color: var(--mut); }
+.item-link > span:last-child { font-size: 22px; color: var(--faint); }
+.seg.three.rec { margin-bottom: 12px; }

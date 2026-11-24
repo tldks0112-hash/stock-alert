@@ -5,7 +5,7 @@
   var CFG = window.APP_CONFIG || {};
   var LIVE = !!(CFG.supabaseUrl && CFG.supabaseKey);
   var $app = document.getElementById('app');
-  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed' };
+  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
@@ -82,6 +82,7 @@
     setTimeout(function () { t.remove(); }, 2600);
   }
   var ICON = {
+    x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     bell: '<svg viewBox="0 0 24 24" fill="none" stroke="#333D4B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="#333D4B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
@@ -306,7 +307,128 @@
       (off.length ? '<p class="small" style="margin:0">설정에서 끈 ' + off.join('·') + '은 빼고 계산했어요.</p>' : '') + '</section>';
   }
 
-    // ---------- 화면 조각 ----------
+    // ---------- 장 시간 (공휴일은 반영 안 함) ----------
+  var SESS = { kr: { tz: 'Asia/Seoul', open: 540, close: 930 }, us: { tz: 'America/New_York', open: 570, close: 960 } };
+  function tzParts(d, tz) {
+    var o = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(d).forEach(function (x) { o[x.type] = x.value; });
+    return { y: +o.year, m: +o.month, d: +o.day, min: (+o.hour % 24) * 60 + (+o.minute) };
+  }
+  function tzOffset(d, tz) { var o = tzParts(d, tz); return Math.round((Date.UTC(o.y, o.m - 1, o.d, 0, o.min) - d.getTime()) / 60000); }
+  function at(tz, y, m, d, min) {                  // 그 시장 시간대의 y-m-d hh:mm → 실제 시각
+    var guess = Date.UTC(y, m - 1, d, 0, min);
+    return new Date(guess - tzOffset(new Date(guess), tz) * 60000);
+  }
+  function marketHours(mk, now) {
+    if (mk === 'crypto') return { open: true, text: '24시간' };
+    var ss = SESS[mk], p = tzParts(now, ss.tz);
+    var wd = new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();
+    if (wd > 0 && wd < 6 && p.min >= ss.open && p.min < ss.close)
+      return { open: true, text: hm(at(ss.tz, p.y, p.m, p.d, ss.close).toISOString()) + ' 마감' };
+    for (var i = 0; i < 8; i++) {
+      var dd = new Date(Date.UTC(p.y, p.m - 1, p.d + i)), w = dd.getUTCDay();
+      if (w === 0 || w === 6 || (i === 0 && p.min >= ss.open)) continue;
+      var t = at(ss.tz, dd.getUTCFullYear(), dd.getUTCMonth() + 1, dd.getUTCDate(), ss.open);
+      var sameDay = kst(t, { day: 'numeric' }) === kst(now, { day: 'numeric' });
+      var tomorrow = kst(t, { day: 'numeric' }) === kst(new Date(now.getTime() + 864e5), { day: 'numeric' });
+      return { open: false, text: (sameDay ? '' : tomorrow ? '내일 ' : kst(t, { weekday: 'short' }) + ' ') + hm(t.toISOString()) + ' 개장' };
+    }
+    return { open: false, text: '휴장' };
+  }
+  function hoursLine(p) {
+    var now = new Date();
+    return '<p class="hours" aria-label="장 시간 (한국 시간)">' + ['kr', 'us', 'crypto'].filter(function (mk) { return p.markets.indexOf(mk) >= 0; }).map(function (mk) {
+      var h = marketHours(mk, now);
+      return '<span><i class="' + (h.open ? 'on' : '') + '"></i>' + MARKET[mk] + ' ' + (h.open ? '장중 · ' : '') + h.text + '</span>';
+    }).join('') + '</p>';
+  }
+
+  // ---------- 아침 브리핑 ----------
+  function briefCard(b) {
+    if (!b || !b.day) return '';
+    var age = (Date.now() - new Date(b.at).getTime()) / 36e5;
+    if (!(age < 20) || store.get(K.briefHide, '') === b.day) return '';
+    var d = new Date(b.at), wd = '일월화수목금토'.charAt(new Date(b.day + 'T12:00:00+09:00').getDay());
+    var idx = (b.idx || []).map(function (x) {
+      var val = x.name === '원/달러' ? Math.round(x.last).toLocaleString('ko-KR') + '원' : (x.chg > 0 ? '+' : '') + Number(x.chg).toFixed(1) + '%';
+      return '<div><span>' + esc(x.name) + (x.h24 ? ' <small>24시간</small>' : '') + '</span><b class="' + (x.name === '원/달러' ? '' : tone(x.chg)) + '">' + val + '</b></div>';
+    }).join('');
+    var flow = Object.keys(b.flow || {}).map(function (m) { return MARKET[m] + ' ' + (b.flow[m] ? '<b class="fl-ok">좋음</b>' : '<b class="fl-weak">약함</b>'); }).join(' · ');
+    var a = b.alerts || {}, c = b.closed || {};
+    var rows = [];
+    if (flow) rows.push('<div class="line"><span>시장 흐름</span><span>' + flow + '</span></div>');
+    rows.push('<div class="line"><span>새 타점 (24시간)</span><b>매수 ' + (a.buy || 0) + ' · 매도 ' + (a.sell || 0) + '</b></div>');
+    if (c.n) rows.push('<div class="line"><span>끝난 알림 거래 (100만원씩)</span><b>' + c.n + '번 · 이익 ' + c.wins + ' · <span class="' + tone(c.sum) + '">' + manwon(c.sum) + '</span></b></div>');
+    rows.push('<div class="line"><span>보유 · 매수 대기</span><b>' + (b.held || 0) + ' · ' + (b.waiting || 0) + '</b></div>');
+    if (b.earn && b.earn.length) rows.push('<div class="line"><span>실적 예정</span><b style="text-align:right">' + b.earn.slice(0, 4).map(function (e) { return esc(e.name) + ' ' + e.day.slice(5).replace('-', '/'); }).join(', ') + '</b></div>');
+    return '<section class="card brief"><div class="line"><h2 style="font-size:15px">☀️ 아침 브리핑</h2><span class="small">' + kst(d, { month: 'numeric', day: 'numeric' }).replace(/\.\s*/g, '/').replace(/\/$/, '') + '(' + wd + ') ' + hm(b.at) +
+      ' <button class="x" data-act="briefhide" aria-label="오늘 브리핑 닫기">' + ICON.x + '</button></span></div>' +
+      (idx ? '<div class="idx">' + idx + '</div>' : '') + rows.join('') + '</section>';
+  }
+
+  // ---------- 내 매매일지 (이 휴대폰에만 저장) ----------
+  function jr() { var x = store.get(K.jr, []); return Array.isArray(x) ? x : []; }
+  function jrSave(x) { store.set(K.jr, x); }
+  function amt(m, v) {
+    if (v == null || isNaN(v)) return '-';
+    var s = v > 0 ? '+' : v < 0 ? '-' : '', a = Math.abs(v);
+    return m === 'us' ? s + '$' + a.toLocaleString('en-US', { maximumFractionDigits: 2 }) : s + Math.round(a).toLocaleString('ko-KR') + '원';
+  }
+  function jret(e) { return e.out ? e.out.price / e.buy - 1 : null; }
+  function heldBy(a) { return jr().filter(function (e) { return !e.out && e.market === a.market && e.name === a.name; })[0]; }
+  function jForm(kind, e, a) {          // kind: buy(샀어요) / sell(팔았어요)
+    var m = e ? e.market : a.market;
+    if (kind === 'buy') {
+      var dflt = m === 'us' ? 1000 : 1000000;
+      return '<form data-form="jbuy" class="jform" data-id="' + esc(a.id) + '"><label>산 가격 (' + (m === 'us' ? '달러' : '원') + ')<input name="price" type="number" inputmode="decimal" step="any" min="0" required value="' + esc(a.buy || a.price) + '"></label>' +
+        '<label>투자 금액 (' + (m === 'us' ? '달러' : '원') + ')<input name="amount" type="number" inputmode="decimal" step="any" min="0" required value="' + dflt + '"></label>' +
+        '<div class="two"><button type="button" class="btn ghost" data-act="jcancel">취소</button><button class="btn" type="submit">기록하기</button></div></form>';
+    }
+    return '<form data-form="jsell" class="jform" data-id="' + esc(e.id) + '"><label>판 가격 (' + (m === 'us' ? '달러' : '원') + ')<input name="price" type="number" inputmode="decimal" step="any" min="0" required value="' + esc(e.sell || e.buy) + '"></label>' +
+      '<div class="two"><button type="button" class="btn ghost" data-act="jcancel">취소</button><button class="btn" type="submit">팔았어요</button></div></form>';
+  }
+  function jRow(e) {
+    var m = e.market, r = jret(e);
+    if (!e.out) {
+      var plan = (e.stop ? '손절가 <b class="blue">' + money(m, e.stop) + '</b>' : '') + (e.sell ? ' · ' + (e.half ? '1차 매도' : '매도') + ' <b class="red">' + money(m, e.sell) + '</b>' : '');
+      return '<section class="card jrow"><div class="line"><b class="name">' + esc(e.name) + '</b><span class="small">' + MARKET[m] + ' · ' + dayLabel(e.at) + ' 매수</span></div>' +
+        '<div class="line"><span>산 가격 ' + money(m, e.buy) + '</span><span>' + amt(m, e.amount).replace('+', '') + '</span></div>' +
+        (plan ? '<p class="small" style="margin:0">' + plan + '</p>' : '') +
+        (S.jsell === e.id ? jForm('sell', e) : '<div class="two"><button class="btn ghost" data-act="jdel" data-v="' + esc(e.id) + '">' + (S.jdel === e.id ? '정말 지울까요?' : '지우기') + '</button><button class="btn" data-act="jsellopen" data-v="' + esc(e.id) + '">팔았어요</button></div>') + '</section>';
+    }
+    return '<div class="jdone"><span><b>' + esc(e.name) + '</b><small>' + MARKET[m] + ' · ' + money(m, e.buy) + ' → ' + money(m, e.out.price) + ' · ' + dayLabel(e.out.at) + '</small></span>' +
+      '<span style="text-align:right"><b class="' + tone(r * 100) + '">' + (r > 0 ? '+' : '') + (r * 100).toFixed(1) + '%</b><small class="' + tone(r) + '">' + amt(m, e.amount * r) + '</small></span>' +
+      '<button class="x" data-act="jdel" data-v="' + esc(e.id) + '" aria-label="기록 지우기">' + (S.jdel === e.id ? '<small>지울까요?</small>' : ICON.x) + '</button></div>';
+  }
+  function journalSection() {
+    var all = jr(), open = all.filter(function (e) { return !e.out; }), done = all.filter(function (e) { return e.out; }).sort(function (x, y) { return x.out.at < y.out.at ? 1 : -1; });
+    var head = '<p class="foot-note" style="margin:0 4px">타점에서 <b>샀어요</b>를 누르면 여기에 적혀요. 판 다음 <b>팔았어요</b>를 누르면 손익·승률을 자동으로 계산해요. 기록은 이 휴대폰에만 저장돼요.</p>';
+    if (!all.length) return head + '<p class="empty">아직 기록이 없어요.<br>타점을 눌러 <b>샀어요 · 매매일지에 적기</b>를 눌러 보세요.</p>';
+    var rets = done.map(jret), wins = rets.filter(function (r) { return r > 0; }).length;
+    var sum = { kr: 0, us: 0 }; done.forEach(function (e) { sum[e.market === 'us' ? 'us' : 'kr'] += e.amount * jret(e); });
+    var avg = rets.length ? rets.reduce(function (x, y) { return x + y; }, 0) / rets.length * 100 : null;
+    var summary = '<section class="card"><h2 style="font-size:15px">내 성적</h2>' + (done.length ?
+      '<div class="big2"><div><span>평균 수익률</span><strong class="' + tone(avg) + '">' + pct(avg) + '</strong><em>판 거래 ' + done.length + '번</em></div><div><span>이긴 비율</span><strong>' + Math.round(wins / done.length * 100) + '%</strong><em>' + done.length + '번 중 ' + wins + '번 이익</em></div></div>' +
+      (done.some(function (e) { return e.market !== 'us'; }) ? '<div class="line"><span>원화 손익 합계</span><b class="' + tone(sum.kr) + '">' + amt('kr', sum.kr) + '</b></div>' : '') +
+      (done.some(function (e) { return e.market === 'us'; }) ? '<div class="line"><span>달러 손익 합계</span><b class="' + tone(sum.us) + '">' + amt('us', sum.us) + '</b></div>' : '')
+      : '<p class="small" style="margin:0">아직 판 거래가 없어요. 팔면 손익과 이긴 비율이 나와요.</p>') + '</section>';
+    return head + summary + (open.length ? '<h3 class="sub-h" style="margin:6px 4px 0">보유 중 ' + open.length + '</h3>' + open.map(jRow).join('') : '') +
+      (done.length ? '<h3 class="sub-h" style="margin:6px 4px 0">끝난 거래</h3><section class="card" style="gap:0">' + done.map(jRow).join('') + '</section>' : '');
+  }
+  function journalBox(a) {              // 타점 상세 화면 아래
+    var mine = jr().filter(function (e) { return e.aid === a.id; })[0], held = heldBy(a);
+    if (a.side === 'buy') {
+      if (mine) return '<section class="card"><div class="line"><h2 style="font-size:15px">내 매매일지</h2><span class="tag">' + (mine.out ? '판 거래' : '보유 중') + '</span></div><p class="small" style="margin:0">' + money(a.market, mine.buy) + '에 ' + amt(a.market, mine.amount).replace('+', '') + ' 샀다고 적었어요.</p><a class="link-row" href="#/record/mine">매매일지에서 보기 →</a></section>';
+      return '<section class="card"><h2 style="font-size:15px">내 매매일지</h2>' + (S.jbuy === String(a.id) ? jForm('buy', null, a) : '<button class="btn ghost" data-act="jbuyopen" data-v="' + esc(a.id) + '">샀어요 · 매매일지에 적기</button>') + '</section>';
+    }
+    if (!held) return '';
+    var r = a.price / held.buy - 1;
+    return '<section class="card held"><div class="line"><h2 style="font-size:15px">내가 보유 중이에요</h2><span class="tag">매매일지</span></div><p class="small" style="margin:0">' + money(a.market, held.buy) + '에 샀어요 · 알림 때 가격 기준 <b class="' + tone(r) + '">' + (r > 0 ? '+' : '') + (r * 100).toFixed(1) + '%</b></p>' +
+      (S.jsell === held.id ? jForm('sell', held) : '<button class="btn" data-act="jsellopen" data-v="' + esc(held.id) + '">팔았어요</button>') + '</section>';
+  }
+
+  // ---------- 화면 조각 ----------
   function menu(on) {
     function a(id, href, icon, label) { return '<a href="' + href + '" class="' + (on === id ? 'on' : '') + '"' + (on === id ? ' aria-current="page"' : '') + '>' + icon + label + '</a>'; }
     return '<nav class="menu" aria-label="메뉴"><div>' + a('home', '#/', ICON.list, '타점') + a('ind', '#/ind', ICON.sliders, '지표 설정') + a('record', '#/record', ICON.chart, '성적표') + a('settings', '#/settings', ICON.gear, '설정') + '</div></nav>';
@@ -332,7 +454,7 @@
         ['반등 폭', a.rebound ? '+' + ((a.rebound / a.price - 1) * 100).toFixed(1) + '%' : '-', '']];
       foot = '신호 점수 ' + a.score + '/10 · 보유 중이면 ' + (a.rebound ? '지금 또는 반등 때 매도' : '지금 매도');
     }
-    return '<a class="card" href="#/alert/' + esc(a.id) + '"><div class="head"><div class="title"><div class="name"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(a.name) + '</div><span class="small">' + esc(where(a)) + '</span></div>' + chip(a) + '</div>' +
+    return '<a class="card' + (!buy && heldBy(a) ? ' held' : '') + '" href="#/alert/' + esc(a.id) + '"><div class="head"><div class="title"><div class="name"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(a.name) + (heldBy(a) ? '<span class="mine">보유</span>' : '') + '</div><span class="small">' + esc(where(a)) + '</span></div>' + chip(a) + '</div>' +
       '<div class="vals">' + vals.map(function (v) { return '<div><span>' + v[0] + '</span><strong class="' + v[2] + '">' + esc(v[1]) + '</strong></div>'; }).join('') + '</div>' +
       '<span class="foot">' + esc(foot) + '</span></a>';
   }
@@ -388,11 +510,11 @@
       : items.length ? items.map(card).join('')
       : '<p class="empty">최근 3일 동안 ' + (S.tab === 'all' ? '' : MARKET[S.tab] + ' ') + '내 조건에 맞는 타점이 없어요.<br>타점이 생기면 알림으로 알려 드려요.</p>';
     if (f && !S.error && hidden > 0) body += '<button class="btn ghost" data-act="showall">' + (S.showAll ? '내 조건에 맞는 것만 보기' : '조건에 안 맞아 숨긴 타점 ' + hidden + '건 보기') + '</button>';
-    if (f && !S.error) body += '<a class="link-row" href="#/ind">받을 알림 조건 바꾸기 · 지표 설정 →</a>';
+    if (f && !S.error) body += '<a class="link-row" href="#/ind">받을 알림 조건 바꾸기 · 지표 설정 →</a><a class="link-row" href="#/guide">처음이라면 · 타점노트 사용법 보기 →</a>';
     return top('<span class="brand">타점노트<span class="tag">무료 베타</span></span>',
       '<span style="display:flex"><button class="icon-btn" data-act="refresh" aria-label="새로고침">' + ICON.refresh + '</button><a class="icon-btn" href="#/settings" aria-label="알림 설정">' + ICON.bell + '</a></span>',
-      '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>') +
-      '<main class="page"><div class="row-head"><h1>최근 타점 <span>' + items.length + '건</span></h1><span class="small">' + esc(status) + '</span></div>' + body +
+      '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>' + hoursLine(pf)) +
+      '<main class="page">' + (f && S.tab === 'all' && !S.error ? briefCard(f.brief) : '') + '<div class="row-head"><h1>최근 타점 <span>' + items.length + '건</span></h1><span class="small">' + esc(status) + '</span></div>' + body +
       '<p class="foot-note">안정성은 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지로 매겨요. 최근 3일 알림만 보여요.</p></main>' + menu('home');
   }
   function ladder(a) {
@@ -437,6 +559,7 @@
         (a.rebound ? '<li><i>1</i><span>지금 팔거나, <b>' + money(m, a.rebound) + '</b>까지 반등하면 팔아요</span></li>' : '<li><i>1</i><span>가까운 반등 자리가 없어요. 보유 중이라면 <b>지금 매도</b>를 참고하세요</span></li>') +
         '<li><i>2</i><span>다시 살 때는 🔴 매수 알림이 올 때만 사요</span></li></ol><div class="line"><span>신호 점수 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
     }
+    out.push(journalBox(a));
     out.push('<a class="btn" href="https://tossinvest.com" target="_blank" rel="noopener">증권 앱에서 보기</a>' +
       '<p class="foot-note">투자 참고용 정보이며 투자자문·매매 권유가 아니에요. 개별 상담과 자금 운용은 하지 않아요. 원금 손실이 생길 수 있고, 과거 성적은 미래 수익을 보장하지 않아요.</p>');
     return head + '<main class="page">' + out.join('') + '</main>' + menu('home');
@@ -475,13 +598,14 @@
   }
   function pageRecord() {
     var f = S.feed, body;
-    if (!f) body = '<p class="empty">' + (S.error ? esc(S.error) : '불러오는 중…') + '</p>';
+    if (!f && S.rec !== 'mine') body = '<p class="empty">' + (S.error ? esc(S.error) : '불러오는 중…') + '</p>';
+    else if (S.rec === 'mine') body = journalSection();
     else if (S.rec === 'sim') {
       body = f.sim && f.sim.markets && f.sim.markets.length
         ? '<p class="foot-note" style="margin:0 4px">알림이 올 때마다 100만원씩 샀다고 치고 과거(국장·미장 약 3년, 코인 2년)를 다시 돌려 본 결과예요. 수수료 0.2% 포함 · ' + kst(new Date(f.sim.made), { month: 'numeric', day: 'numeric' }) + ' 계산</p>' + f.sim.markets.map(simSection).join('')
         : '<p class="empty">아직 계산한 결과가 없어요.<br>점검 작업을 한 번 돌리면 여기에 나와요.</p>';
     } else body = liveSection(f.live);
-    return top('<h1 style="margin:0;font-size:20px">성적표</h1>', '', demoBar() + '<div class="seg" role="tablist"><button role="tab" data-act="rec" data-v="sim" class="' + (S.rec === 'sim' ? 'on' : '') + '" aria-selected="' + (S.rec === 'sim') + '">과거 시뮬레이션</button><button role="tab" data-act="rec" data-v="live" class="' + (S.rec === 'live' ? 'on' : '') + '" aria-selected="' + (S.rec === 'live') + '">실전 기록</button></div>') +
+    return top('<h1 style="margin:0;font-size:20px">성적표</h1>', '', demoBar() + '<div class="seg three rec" role="tablist"><button role="tab" data-act="rec" data-v="sim" class="' + (S.rec === 'sim' ? 'on' : '') + '" aria-selected="' + (S.rec === 'sim') + '">과거 시뮬레이션</button><button role="tab" data-act="rec" data-v="live" class="' + (S.rec === 'live' ? 'on' : '') + '" aria-selected="' + (S.rec === 'live') + '">실전 기록</button><button role="tab" data-act="rec" data-v="mine" class="' + (S.rec === 'mine' ? 'on' : '') + '" aria-selected="' + (S.rec === 'mine') + '">내 매매일지</button></div>') +
       '<main class="page">' + body + '<p class="foot-note">과거 성적은 미래 수익을 보장하지 않아요. 투자 참고용 정보이며 투자자문이 아니에요.</p></main>' + menu('record');
   }
   function sw(act, on, label, hint, disabled) {
@@ -542,11 +666,26 @@
       sw('mk-kr', mk.indexOf('kr') >= 0, '국장', '평일 09:15 ~ 15:20') + sw('mk-us', mk.indexOf('us') >= 0, '미장', '평일 밤 (한국 시간)') +
       sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때 · 과거 기록에서 3일 뒤 실제로 내린 비율은 절반 정도였어요') +
       sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
+      '<a class="list item-link" href="#/guide"><span><b>타점노트 사용법</b><small>알림 읽는 법 · 사고파는 순서 · 장 시간</small></span><span aria-hidden="true">›</span></a>' +
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
       '<details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">개인정보 안내</summary><p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--sub)">이름·전화번호·이메일은 받지 않아요. 푸시 알림을 켜면 이 휴대폰의 알림 주소와 알림 설정만 저장하고, 알림을 끄면 지워요. 입장 코드는 이 휴대폰에만 저장돼요. <a href="privacy.html" style="color:var(--blue);text-decoration:underline">개인정보처리방침 전체 보기</a></p></details>' +
       (LIVE && c && c !== OPEN_CODE ? '<div class="line"><span>초대 코드 ' + esc(c.slice(0, 4)) + '-••••</span><button class="btn ghost" style="width:auto;min-height:40px;padding:0 14px;font-size:13px" data-act="logout">코드 지우기</button></div>' : '') + '</section>' +
       '<p class="foot-note">투자 참고용 정보이며 투자자문이 아니에요. 서비스 제공자는 금융투자업자가 아니며, 개별 상담과 자금 운용은 하지 않아요.</p></main>' + menu('settings');
+  }
+
+  function pageGuide() {
+    var sec = function (t, body) { return '<section class="card guide"><h2>' + t + '</h2>' + body + '</section>'; };
+    var li = function (xs) { return '<ul>' + xs.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>'; };
+    return top('<span style="display:flex;align-items:center;gap:2px"><a class="icon-btn" href="#/" aria-label="뒤로">' + ICON.back + '</a><span style="font-size:16px;font-weight:700">타점노트 사용법</span></span>') + '<main class="page">' +
+      sec('타점노트는 이런 앱이에요', '<p>국장·미장·코인에서 정해진 규칙(지표 10가지 + 안정성 검사)에 맞는 자리가 생기면 알려 줘요. 사람이 고르는 추천이 아니라 규칙대로 계산한 <b>참고 정보</b>예요.</p>') +
+      sec('🔴 매수 알림 읽는 법', li(['<b>매수 기준가</b>: 이 가격 근처나 아래에서 사요. 지금 가격이 많이 위면 기다려요.', '<b>손절가</b>: 여기에 닿으면 팔아서 손실을 작게 끊어요. 가장 중요해요.', '<b>1차 매도</b>: 여기서 절반을 팔고, 남은 절반은 손절가를 산 가격으로 올려요.', '<b>나머지</b>: 오른 뒤 고점에서 정해진 만큼 빠지면 팔아요.', '<b>안정성</b>: 시장 흐름·추세·눌림·변동성·실적·과거 성적 6가지 중 몇 개를 통과했는지예요.', '<b>신호 점수</b>: 지표 10가지 중 몇 개가 맞았는지예요.'])) +
+      sec('🔵 매도 알림', '<p>이미 갖고 있는 종목이 약해질 때 와요. 갖고 있지 않다면 무시해도 돼요. 과거 기록에서 3일 뒤 실제로 내린 건 절반 정도라 참고만 하세요.</p>') +
+      sec('알림이 오면 이 순서로', '<ol><li>앱에서 매수 기준가·손절가를 확인해요.</li><li>증권사 앱에서 <b>현재가</b>를 꼭 다시 봐요. 국장 시세는 늦을 수 있어요.</li><li>지정가로 주문해요. 한 종목에 돈을 너무 많이 넣지 않아요.</li><li>손절가에 알림이나 주문을 걸어 둬요.</li><li>타점 화면에서 <b>샀어요</b>를 눌러 매매일지에 적어요.</li></ol>') +
+      sec('지표 설정 · 수익성 · 안정성', li(['<b>지표 설정</b> 탭에서 받을 매수 알림 조건을 골라요. 처음이면 <b>추천</b>이 무난해요.', '<b>수익성</b>: 알림대로 100만원씩 샀을 때 한 번 살 때 평균 수익률(수수료 포함)이에요.', '<b>안정성</b>: 알림이 있었던 달 중 수익 난 달의 비율이에요.', '모두 과거 데이터로 계산한 값이라 앞으로도 그렇다는 보장은 없어요.'])) +
+      sec('장 시간 (한국 시간)', li(['국장: 평일 09:00 ~ 15:30', '미장: 평일 23:30 ~ 다음 날 06:00 (미국 서머타임에는 22:30 ~ 05:00)', '코인: 24시간', '공휴일 휴장은 앱 표시에 반영되지 않아요.'])) +
+      sec('꼭 지켜 주세요', li(['손절가는 꼭 지켜요. 버티다 손실이 커지는 경우가 가장 많아요.', '빌린 돈이나 당장 필요한 돈으로 하지 않아요.', '알림은 참고 정보예요. 투자 판단과 책임은 본인에게 있어요.'])) +
+      '</main>' + menu('');
   }
 
   // ---------- 그리기 · 이동 ----------
@@ -559,7 +698,8 @@
       else { html = pageWait(); if (S.open === null) setTimeout(checkOpen, 0); }
     }
     else if (r.p === 'alert') html = pageDetail(r.id);
-    else if (r.p === 'record') html = pageRecord();
+    else if (r.p === 'record') { if (r.id === 'mine' || r.id === 'sim' || r.id === 'live') S.rec = r.id; html = pageRecord(); }
+    else if (r.p === 'guide') html = pageGuide();
     else if (r.p === 'settings') html = pageSettings();
     else if (r.p === 'ind') html = pageInd();
     else html = pageHome();
@@ -579,6 +719,15 @@
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
     showall: function () { S.showAll = !S.showAll; render(); },
+    briefhide: function () { var b = S.feed && S.feed.brief; if (b) store.set(K.briefHide, b.day); render(); },
+    jbuyopen: function (t) { S.jbuy = t.dataset.v; S.jsell = null; render(); },
+    jsellopen: function (t) { S.jsell = t.dataset.v; S.jbuy = null; S.jdel = null; render(); },
+    jcancel: function () { S.jbuy = S.jsell = null; render(); },
+    jdel: function (t) {
+      var id = t.dataset.v;
+      if (S.jdel !== id) { S.jdel = id; render(); return; }
+      jrSave(jr().filter(function (e) { return e.id !== id; })); S.jdel = null; toast('기록을 지웠어요'); render();
+    },
     cm: function (t) { S.cm = t.dataset.v; render(); loadStats(); },
     preset: function (t) {
       var p = prefs(), id = t.dataset.v;
@@ -613,7 +762,24 @@
     render();
   });
   $app.addEventListener('submit', function (e) {
-    if (e.target.getAttribute('data-form') !== 'code') return;
+    var form = e.target.getAttribute('data-form');
+    if (form === 'jbuy' || form === 'jsell') {
+      e.preventDefault();
+      var price = parseFloat(e.target.price.value), id = e.target.getAttribute('data-id'), list = jr();
+      if (!(price > 0)) { toast('가격을 확인해 주세요'); return; }
+      if (form === 'jbuy') {
+        var amount = parseFloat(e.target.amount.value);
+        var a = ((S.feed && S.feed.alerts) || []).filter(function (x) { return String(x.id) === id; })[0];
+        if (!a || !(amount > 0)) { toast('금액을 확인해 주세요'); return; }
+        list.push({ id: 'j' + Date.now(), aid: a.id, name: a.name, market: a.market, buy: price, amount: amount, stop: a.stop, sell: a.sell, half: !!a.half, at: new Date().toISOString(), out: null });
+        S.jbuy = null; toast('매매일지에 적었어요');
+      } else {
+        list.forEach(function (x) { if (x.id === id) x.out = { price: price, at: new Date().toISOString() }; });
+        S.jsell = null; toast('판 기록을 적었어요');
+      }
+      jrSave(list); render(); return;
+    }
+    if (form !== 'code') return;
     e.preventDefault();
     var c = (e.target.code.value || '').trim().toUpperCase();
     if (!c) return;
@@ -626,7 +792,7 @@
   });
   window.addEventListener('hashchange', render);
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') loadFeed(); });
-  setInterval(function () { if (document.visibilityState === 'visible' && !/settings|alert|ind/.test(location.hash)) loadFeed(); }, 60000);
+  setInterval(function () { if (document.visibilityState === 'visible' && !/settings|alert|ind|guide/.test(location.hash) && !S.jsell && !S.jbuy) loadFeed(); }, 60000);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('sw.js').catch(function () {});
   }
