@@ -223,26 +223,83 @@
     var need = (r.need || []).filter(function (g) { return market === 'us' || g !== '실적'; });
     return (need.length ? need.join('·') : '안정성 조건 없음') + (r.card ? ' · 과거 성적' : '') + ' · 신호 ' + r.score + '점 이상';
   }
-  function resultLine(mk, x) {
-    if (!x || !x.n) return '<div class="line"><span>' + MARKET[mk] + '</span><span class="small">지난 2년 거래 없음</span></div>';
-    var win = Math.round(x.wins / x.n * 100);
-    return '<div class="line"><span>' + MARKET[mk] + ' <small class="small">' + x.n + '번 · 이긴 비율 ' + win + '%</small></span><b class="' + tone(x.total) + '">' + manwon(x.total) + '</b></div>';
-  }
-  function halvesLine(x) {
-    if (!x || !x.n) return '';
-    return '<p class="small" style="margin:0">앞 1년 <b class="' + tone(x.h1) + '">' + manwon(x.h1) + '</b> · 뒤 1년 <b class="' + tone(x.h2) + '">' + manwon(x.h2) + '</b> · 가장 크게 잃은 구간 ' + (x.dd >= 0.1 ? '-' + manwon(x.dd).replace('+', '') : '없음') + '</p>';
-  }
-  function loadResearch() {
-    var c = customOf(prefs()), key = S.cm + JSON.stringify(c);
-    if (S.res && S.res.key === key) return;
-    S.res = { key: key, data: null, loading: LIVE, mk: S.cm };
+  function statKey(p) { return p.rules ? JSON.stringify(p.rules) : ''; }
+  function loadStats() {
+    var p = prefs(), key = statKey(p);
+    if (!key || (S.st && S.st.key === key)) return;
+    S.st = { key: key, data: null, loading: LIVE };
     if (!LIVE) return;
-    rpc('app_research', { p_code: code(), p_score: c.score, p_need: c.need, p_card: c.card })
-      .then(function (d) { if (S.res && S.res.key === key) { S.res.data = d || {}; S.res.loading = false; render(); } })
-      .catch(function () { if (S.res && S.res.key === key) { S.res.loading = false; S.res.err = true; render(); } });
+    rpc('app_research_rules', { p_code: code(), p_rules: p.rules })
+      .then(function (d) { if (S.st && S.st.key === key) { S.st.data = d || {}; S.st.loading = false; render(); } })
+      .catch(function () { if (S.st && S.st.key === key) { S.st.loading = false; S.st.err = true; render(); } });
+  }
+  function curStats(p) {
+    var key = statKey(p);
+    if (!key) return null;
+    if (!S.st || S.st.key !== key) { setTimeout(loadStats, 0); return { loading: true }; }
+    return S.st;
+  }
+  // 수익성 = 알림마다 100만원씩 샀을 때 한 번 평균 수익률(합계 만원 ÷ 알림 수 = %)
+  // 안정성 = 알림이 있었던 달 중 수익 난 달 비율
+  function combine(list) {
+    var o = { n: 0, wins: 0, total: 0, h1: 0, h2: 0, mon: {}, hasMon: true };
+    list.forEach(function (x) {
+      o.n += x.n || 0; o.wins += x.wins || 0; o.total += x.total || 0; o.h1 += x.h1 || 0; o.h2 += x.h2 || 0;
+      if (!x.mon) { if (x.n) o.hasMon = false; return; }
+      for (var k in x.mon) o.mon[k] = (o.mon[k] || 0) + x.mon[k];
+    });
+    return o;
+  }
+  function stat(x) {
+    var months = x.mon ? Object.keys(x.mon) : [], pos = months.filter(function (k) { return x.mon[k] > 0; }).length;
+    return { profit: x.n ? x.total / x.n : null, stable: x.n && x.mon && x.hasMon !== false && months.length ? pos / months.length * 100 : null,
+      months: months.length, pos: pos, win: x.n ? x.wins / x.n * 100 : null };
+  }
+  function pct(v) {
+    if (v == null || isNaN(v)) return '-';
+    var a = Math.abs(v);
+    return (v > 0.004 ? '+' : v < -0.004 ? '-' : '') + (a < 1 ? a.toFixed(2) : a.toFixed(1)) + '%';
+  }
+  function perHundred(v) {          // 100만원당 평균 손익 (원)
+    if (v == null) return '-';
+    var w = Math.round(v * 10000);
+    return (w > 0 ? '+' : w < 0 ? '-' : '') + Math.abs(w).toLocaleString('ko-KR') + '원';
+  }
+  function marketStat(mk, x) {
+    if (!x || !x.n) return '<div class="mk-row"><div class="line"><b class="mk">' + MARKET[mk] + '</b><span class="small">지난 2년 이 조건에 맞는 알림 없음</span></div></div>';
+    var t = stat(x);
+    return '<div class="mk-row"><div class="line"><span><b class="mk">' + MARKET[mk] + '</b> 수익성 <b class="' + tone(t.profit) + '">' + pct(t.profit) + '</b> · 안정성 <b>' + (t.stable == null ? '-' : Math.round(t.stable) + '%') + '</b></span>' +
+      '<b class="' + tone(x.total) + '">' + manwon(x.total) + '</b></div>' +
+      '<p class="small" style="margin:0">' + x.n + '번 · 이긴 비율 ' + Math.round(t.win) + '% · 앞 1년 <b class="' + tone(x.h1) + '">' + manwon(x.h1) + '</b> · 뒤 1년 <b class="' + tone(x.h2) + '">' + manwon(x.h2) + '</b>' +
+      (x.dd != null ? ' · 가장 크게 잃은 구간 ' + (x.dd >= 0.1 ? '-' + manwon(x.dd).replace('+', '') : '없음') : '') +
+      (x.n < 30 ? '<br><span class="warn-t">알림이 ' + x.n + '번뿐이라 숫자를 믿기 어려워요</span>' : '') + '</p></div>';
+  }
+  function statSection(p) {
+    var head = '<div class="line"><h2 style="font-size:15px">내 설정 예상 성적</h2><span class="small">지난 2년 백테스트</span></div>';
+    var R = curStats(p), mks = ['kr', 'us', 'crypto'].filter(function (mk) { return p.markets.indexOf(mk) >= 0; });
+    var msg = !p.rules ? '아래에서 <b>추천</b>이나 <b>직접 설정</b>을 고르면 수익성과 안정성이 나와요.'
+      : !LIVE ? '앱 연결 후 지난 2년 성적이 여기에 나와요.'
+      : !mks.length ? '설정에서 국장·미장·코인을 모두 꺼 두었어요.'
+      : R.loading ? '계산 중…'
+      : R.err || !R.data ? '성적을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' : '';
+    if (msg) return '<section class="card mystat">' + head + '<p class="small" style="margin:0">' + msg + '</p></section>';
+    var list = mks.map(function (mk) { return R.data[mk] || { n: 0, wins: 0, total: 0, h1: 0, h2: 0, mon: {} }; });
+    var all = combine(list), t = stat(all);
+    var big = !all.n ? '<p class="info">지난 2년 동안 이 조건에 맞는 매수 알림이 없었어요. 조건을 조금 풀어 보세요.</p>'
+      : '<div class="big2"><div><span>수익성</span><strong class="' + tone(t.profit) + '">' + pct(t.profit) + '</strong><em>한 번 살 때 평균<br>100만원당 ' + perHundred(t.profit) + '</em></div>' +
+        '<div><span>안정성</span><strong>' + (t.stable == null ? '-' : Math.round(t.stable) + '%') + '</strong><em>' + (t.stable == null ? '곧 계산돼요' : '수익 난 달 비율<br>' + t.months + '달 중 ' + t.pos + '달') + '</em>' +
+        (t.stable == null ? '' : '<div class="meter" aria-hidden="true"><i style="width:' + Math.round(t.stable) + '%"></i></div>') + '</div></div>' +
+        '<div class="kv"><div class="line"><span>알림 수</span><b>' + all.n + '번</b></div>' +
+        '<div class="line"><span>이긴 비율</span><b>' + Math.round(t.win) + '%</b></div>' +
+        '<div class="line"><span>2년 합계 (알림마다 100만원)</span><b class="' + tone(all.total) + '">' + manwon(all.total) + '</b></div>' +
+        '<div class="line"><span>앞 1년 / 뒤 1년</span><b><span class="' + tone(all.h1) + '">' + manwon(all.h1) + '</span> / <span class="' + tone(all.h2) + '">' + manwon(all.h2) + '</span></b></div></div>';
+    var off = ['kr', 'us', 'crypto'].filter(function (mk) { return mks.indexOf(mk) < 0; }).map(function (mk) { return MARKET[mk]; });
+    return '<section class="card mystat">' + head + big +
+      '<h3 class="sub-h">시장별</h3>' + mks.map(function (mk) { return marketStat(mk, R.data[mk]); }).join('') +
+      (off.length ? '<p class="small" style="margin:0">설정에서 끈 ' + off.join('·') + '은 빼고 계산했어요.</p>' : '') + '</section>';
   }
 
-  // ---------- 화면 조각 ----------
+    // ---------- 화면 조각 ----------
   function menu(on) {
     function a(id, href, icon, label) { return '<a href="' + href + '" class="' + (on === id ? 'on' : '') + '"' + (on === id ? ' aria-current="page"' : '') + '>' + icon + label + '</a>'; }
     return '<nav class="menu" aria-label="메뉴"><div>' + a('home', '#/', ICON.list, '타점') + a('ind', '#/ind', ICON.sliders, '지표 설정') + a('record', '#/record', ICON.chart, '성적표') + a('settings', '#/settings', ICON.gear, '설정') + '</div></nav>';
@@ -378,7 +435,7 @@
     return head + '<main class="page">' + out.join('') + '</main>' + menu('home');
   }
   function simSection(mk) {
-    var rows = [['새 알림' + (mk.new ? ' ' + mk.new.n + '번' : ''), mk.new ? mk.new.total : null], ['예전 알림', mk.old ? mk.old.total : null], ['그냥 보유', mk.hold]];
+    var rows = [['새 알림' + (mk.new ? ' ' + mk.new.n + '번' : ''), mk.new ? mk.new.total : null], ['예전 알림', mk.old ? mk.old.total : null]];
     var max = Math.max.apply(null, rows.map(function (r) { return Math.abs(r[1] || 0); }).concat([1]));
     var bars = rows.map(function (r) {
       var v = r[1], w = v == null ? 0 : Math.max(2, Math.round(Math.abs(v) / max * 100));
@@ -432,13 +489,12 @@
     if (!cur) {
       body = '<p class="info">아직 조건을 고르지 않았어요. 지금은 안정성 보통 이상 · 신호 6점 이상 매수 알림을 받아요. <b>추천</b>을 눌러 보세요.</p>';
     } else if (cur !== '직접') {
-      var ps = findPreset(cur) || { desc: '', rules: p.rules || {} }, res = ps.result || {};
+      var ps = findPreset(cur) || { desc: '', rules: p.rules || {} };
       body = '<p class="small" style="margin:0;line-height:1.6;color:var(--sub)">' + esc(ps.desc || '') + '</p>' +
         '<div class="rules">' + ['kr', 'us', 'crypto'].map(function (mk) {
           var r = (p.rules || ps.rules || {})[mk];
           return r ? '<div class="line"><span>' + MARKET[mk] + '</span><span class="small" style="text-align:right">' + esc(ruleText(r, mk)) + '</span></div>' : '';
         }).join('') + '</div>' +
-        (Object.keys(res).length ? '<h3 class="sub-h">이 설정으로 지난 2년 (알림마다 100만원씩)</h3>' + ['kr', 'us', 'crypto'].map(function (mk) { return res[mk] ? resultLine(mk, res[mk]) + halvesLine(res[mk]) : ''; }).join('') : '') +
         '<p class="small" style="margin:0">하나씩 바꾸고 싶으면 <b>직접 설정</b>을 누르세요.</p>';
     } else {
       var c = customOf(p);
@@ -451,13 +507,13 @@
         '<h3 class="sub-h">수익성 지표</h3><div class="list inner">' + sw('card', !!c.card, PROFIT[1], PROFIT[2]) + '</div>' +
         '<h3 class="sub-h">신호 점수 <small>지표 10가지 중 몇 개 이상 맞을 때 받을지</small></h3><div class="grades four" role="radiogroup" aria-label="신호 점수">' +
         SCORES.map(function (n) { return '<button role="radio" aria-checked="' + (c.score === n) + '" class="' + (c.score === n ? 'on' : '') + '" data-act="score" data-v="' + n + '">' + n + '점 이상</button>'; }).join('') + '</div>';
-      var R = S.res && S.res.key === S.cm + JSON.stringify(c) ? S.res : null;
-      if (!R) setTimeout(loadResearch, 0);
-      body += '<h3 class="sub-h">' + MARKET[S.cm] + '을 이 조건으로 지난 2년 (알림마다 100만원씩)</h3>' +
+      var R = curStats(p);
+      body += '<h3 class="sub-h">' + MARKET[S.cm] + '을 이 조건으로 지난 2년</h3>' +
         (!LIVE ? '<p class="small" style="margin:0">앱 연결 후 지난 2년 성적이 여기에 나와요.</p>'
           : !R || R.loading ? '<p class="small" style="margin:0">계산 중…</p>'
-          : R.err || !R.data || !R.data[S.cm] ? '<p class="small" style="margin:0">아직 연구 결과가 없어요.</p>'
-          : resultLine(S.cm, R.data[S.cm]) + halvesLine(R.data[S.cm]));
+          : R.err || !R.data ? '<p class="small" style="margin:0">성적을 불러오지 못했어요.</p>'
+          : marketStat(S.cm, R.data[S.cm])) +
+        '<p class="small" style="margin:0">바꿀 때마다 맨 위 <b>내 설정 예상 성적</b>도 같이 바뀌어요.</p>';
     }
     return '<section class="card"><h2 style="font-size:15px">받을 매수 알림</h2><div class="grades four presets" role="radiogroup" aria-label="추천 설정">' + chips + '</div>' + body +
       '</section>';
@@ -466,7 +522,7 @@
     var p = prefs();
     return top('<h1 style="margin:0;font-size:20px">지표 설정</h1>', '', demoBar() +
         '<p class="notice">어떤 매수 알림을 받을지 정해요. 홈 화면 목록과 푸시 알림 모두 이 조건대로 걸러져요.</p>') +
-      '<main class="page">' + condSection(p) +
+      '<main class="page">' + statSection(p) + condSection(p) +
       '<p class="foot-note">지난 2년 성적은 알림마다 100만원씩 샀다고 치고, 수수료 0.2%를 빼고 계산했어요. 과거 성적은 미래 수익을 보장하지 않아요. 투자 참고용 정보이며 투자자문이 아니에요.</p></main>' + menu('ind');
   }
   function pageSettings() {
@@ -516,10 +572,10 @@
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
     showall: function () { S.showAll = !S.showAll; render(); },
-    cm: function (t) { S.cm = t.dataset.v; render(); loadResearch(); },
+    cm: function (t) { S.cm = t.dataset.v; render(); loadStats(); },
     preset: function (t) {
       var p = prefs(), id = t.dataset.v;
-      if (id === '직접') { p.rules = baseRules(p); p.preset = '직접'; savePrefs(p); loadResearch(); return; }
+      if (id === '직접') { p.rules = baseRules(p); p.preset = '직접'; savePrefs(p); loadStats(); return; }
       var ps = findPreset(id); if (!ps) return;
       p.preset = id; p.rules = clone(ps.rules); savePrefs(p); toast(ps.label + ' 설정을 적용했어요');
     },
@@ -527,7 +583,7 @@
     score: function (t) { editCustom(function (c) { c.score = +t.dataset.v; }); },
     logout: function () { if (pushOn()) disablePush(); store.del(K.code); store.del(K.feed); S.feed = null; S.open = false; location.hash = '#/'; render(); }
   };
-  function editCustom(fn) { var p = prefs(), c = customOf(p); fn(c); p.rules = baseRules(p); p.rules[S.cm] = c; p.preset = '직접'; savePrefs(p); loadResearch(); }
+  function editCustom(fn) { var p = prefs(), c = customOf(p); fn(c); p.rules = baseRules(p); p.rules[S.cm] = c; p.preset = '직접'; savePrefs(p); loadStats(); }
   GUARDS.forEach(function (g) {
     ACT['g-' + g[0]] = function () { editCustom(function (c) { var i = c.need.indexOf(g[0]); if (i >= 0) c.need.splice(i, 1); else c.need.push(g[0]); c.need.sort(function (x, y) { return GUARDS.map(function (z) { return z[0]; }).indexOf(x) - GUARDS.map(function (z) { return z[0]; }).indexOf(y); }); }); };
   });
