@@ -5,7 +5,7 @@
   var CFG = window.APP_CONFIG || {};
   var LIVE = !!(CFG.supabaseUrl && CFG.supabaseKey);
   var $app = document.getElementById('app');
-  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push' };
+  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
@@ -95,13 +95,19 @@
     if (S.loading || !code()) return Promise.resolve();
     S.loading = true;
     return rpc('app_feed', { p_code: code(), p_days: 3 }).then(function (f) {
-      S.feed = f; S.error = '';
+      S.feed = f; S.error = ''; S.offline = false;
+      var keep = {}; for (var k in f) keep[k] = f[k];
+      keep.alerts = (f.alerts || []).slice(0, 60); store.set(K.feed, keep);   // 인터넷이 끊겼을 때 보여 줄 마지막 내용
     }).catch(function (e) {
       if (e.invalid) {
         S.open = code() === OPEN_CODE ? false : null;
         store.del(K.code); S.codeErr = '초대 코드가 더 이상 쓸 수 없어요. 새 코드를 넣어 주세요.';
       }
-      else S.error = '불러오지 못했어요. 인터넷 연결을 확인하고 새로고침을 눌러 주세요.';
+      else {
+        var last = S.feed || store.get(K.feed, null);
+        if (last) { S.feed = last; S.offline = true; S.error = ''; }
+        else S.error = '불러오지 못했어요. 인터넷 연결을 확인하고 새로고침을 눌러 주세요.';
+      }
     }).then(function () { S.loading = false; render(); });
   }
 
@@ -178,13 +184,13 @@
   function card(a) {
     var m = a.market, buy = a.side === 'buy', vals, foot;
     if (buy) {
-      vals = [['안전 매수가', money(m, a.buy), 'red'], ['손절가', money(m, a.stop), 'blue'], [a.half ? '1차 매도' : '안전 매도가', money(m, a.sell), '']];
+      vals = [['매수 기준가', money(m, a.buy), 'red'], ['손절가', money(m, a.stop), 'blue'], [a.half ? '1차 매도' : '매도 기준가', money(m, a.sell), '']];
       var miss = (a.misses || []).map(function (x) { return MISS[x] || x; });
-      foot = '안전도 ' + a.score + '/10' + (a.qty ? ' · ' + a.qty : '') + (a.loss ? ' · 손절 시 -' + money(m, a.loss) : '') + (miss.length ? ' · 부족: ' + miss.join(', ') : '');
+      foot = '신호 점수 ' + a.score + '/10' + (a.qty ? ' · ' + a.qty : '') + (a.loss ? ' · 손절 시 -' + money(m, a.loss) : '') + (miss.length ? ' · 부족: ' + miss.join(', ') : '');
     } else {
       vals = [['현재가', money(m, a.price), ''], ['반등 매도가', a.rebound ? money(m, a.rebound) : '지금 매도', 'blue'],
         ['반등 폭', a.rebound ? '+' + ((a.rebound / a.price - 1) * 100).toFixed(1) + '%' : '-', '']];
-      foot = '안전도 ' + a.score + '/10 · 보유 중이면 ' + (a.rebound ? '지금 또는 반등 때 매도' : '지금 매도');
+      foot = '신호 점수 ' + a.score + '/10 · 보유 중이면 ' + (a.rebound ? '지금 또는 반등 때 매도' : '지금 매도');
     }
     return '<a class="card" href="#/alert/' + esc(a.id) + '"><div class="head"><div class="title"><div class="name"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(a.name) + '</div><span class="small">' + esc(where(a)) + '</span></div>' + chip(a) + '</div>' +
       '<div class="vals">' + vals.map(function (v) { return '<div><span>' + v[0] + '</span><strong class="' + v[2] + '">' + esc(v[1]) + '</strong></div>'; }).join('') + '</div>' +
@@ -195,7 +201,7 @@
   function pageWelcome() {
     var all = S.agree.every(Boolean);
     return '<main class="welcome"><div style="display:flex;flex-direction:column;gap:14px"><div class="logo">' + ICON.logo + '</div>' +
-      '<h1>매수·매도 타점을<br>알림으로 받아 보세요</h1><p class="lead">국장·미장·코인에 타점이 생기면 안전 매수가, 손절가, 매도가와 안정성 등급을 함께 알려 드려요.</p>' +
+      '<h1>매수·매도 타점을<br>알림으로 받아 보세요</h1><p class="lead">국장·미장·코인에 타점이 생기면 매수 기준가, 손절가, 매도가와 안정성 등급을 함께 알려 드려요.</p>' +
       '<span class="tag" style="align-self:flex-start">무료 베타 · 결제 없음</span></div>' +
       '<section aria-labelledby="nt" style="display:flex;flex-direction:column;gap:12px"><h2 id="nt" style="margin:0;font-size:16px">시작 전에 꼭 확인해 주세요</h2>' +
       NOTICES.map(function (n, i) {
@@ -231,7 +237,7 @@
       return '<button class="tab' + (S.tab === t[0] ? ' on' : '') + '" data-act="tab" data-v="' + t[0] + '" aria-pressed="' + (S.tab === t[0]) + '">' + t[1] + '</button>';
     }).join('');
     var status = !f ? (S.loading ? '불러오는 중…' : '') : hm(f.now) + ' 업데이트';
-    if (f && LIVE) {
+    if (f && LIVE && !S.offline) {
       var age = f.beat ? Math.round((new Date(f.now) - new Date(f.beat)) / 60000) : null;
       status += age == null ? ' · 엔진 연결 전' : age > 30 ? ' · 엔진 확인 ' + age + '분 전' : ' · 엔진 정상';
     }
@@ -241,13 +247,13 @@
       : '<p class="empty">최근 3일 동안 ' + (S.tab === 'all' ? '' : MARKET[S.tab] + ' ') + '타점이 없어요.<br>타점이 생기면 알림으로 알려 드려요.</p>';
     return top('<span class="brand">타점노트<span class="tag">무료 베타</span></span>',
       '<span style="display:flex"><button class="icon-btn" data-act="refresh" aria-label="새로고침">' + ICON.refresh + '</button><a class="icon-btn" href="#/settings" aria-label="알림 설정">' + ICON.bell + '</a></span>',
-      '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>') +
+      '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>') +
       '<main class="page"><div class="row-head"><h1>최근 타점 <span>' + items.length + '건</span></h1><span class="small">' + esc(status) + '</span></div>' + body +
       '<p class="foot-note">안정성은 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지로 매겨요. 최근 3일 알림만 보여요.</p></main>' + menu('home');
   }
   function ladder(a) {
     var m = a.market, pts = a.side === 'buy'
-      ? [[a.sell, a.half ? '1차 매도' : '안전 매도가', ''], [a.price, '알림 때 가격', 'now'], [a.buy, '안전 매수가', 'red'], [a.stop, '손절가', 'blue']]
+      ? [[a.sell, a.half ? '1차 매도' : '매도 기준가', ''], [a.price, '알림 때 가격', 'now'], [a.buy, '매수 기준가', 'red'], [a.stop, '손절가', 'blue']]
       : [[a.rebound, '반등 매도가', 'blue'], [a.price, '알림 때 가격', 'now']];
     pts = pts.filter(function (p) { return p[0] != null; }).sort(function (x, y) { return y[0] - x[0]; });
     if (pts.length < 2) return '';
@@ -266,13 +272,14 @@
     if (!a) return head + '<main class="page"><p class="empty">' + (S.feed ? '이 타점은 3일이 지나 목록에서 빠졌어요.' : '불러오는 중…') + '</p><a class="btn ghost" href="#/">목록으로</a></main>' + menu('home');
     var m = a.market, buy = a.side === 'buy', out = [];
     out.push('<section class="card"><div class="name" style="font-size:12px;font-weight:400;color:var(--mut)"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(where(a)) + '</div>' +
-      '<h1 style="margin:0;font-size:22px">' + esc(a.name) + '</h1><div class="big-price"><strong>' + money(m, a.price) + '</strong><span class="small">알림 때 가격</span></div>' + ladder(a) + '</section>');
+      '<h1 style="margin:0;font-size:22px">' + esc(a.name) + '</h1><div class="big-price"><strong>' + money(m, a.price) + '</strong><span class="small">알림 때 가격</span></div>' + ladder(a) +
+      (m === 'kr' ? '<p class="info" style="margin-top:12px">국장 시세는 늦게 들어올 수 있어요. 주문 전에 증권사 앱에서 현재가를 꼭 확인해 주세요.</p>' : '') + '</section>');
     if (buy) {
       var gap = (a.price / a.buy - 1) * 100;
       var steps = a.half
         ? ['<b>' + money(m, a.sell) + '</b>에서 절반을 팔아요', '남은 절반은 손절가를 <b>산 가격</b>으로 올려요', '오른 뒤 고점에서 <b>' + money(m, a.trail) + '</b> 빠지면 나머지를 팔아요']
         : ['<b>' + money(m, a.sell) + '</b>에서 팔아요', '<b>' + money(m, a.stop) + '</b>에 닿으면 손절해요'];
-      out.push('<section class="card"><h2>매매 계획</h2><div class="boxes"><div class="box r"><span>안전 매수가 · ' + (gap > 1 ? gap.toFixed(1) + '% 위, 대기' : '지금 가능') + '</span><strong>' + money(m, a.buy) + '</strong><em>' + esc(a.qty || '') + '</em></div>' +
+      out.push('<section class="card"><h2>매매 계획</h2><div class="boxes"><div class="box r"><span>매수 기준가 · ' + (gap > 1 ? gap.toFixed(1) + '% 위, 대기' : '지금 가능') + '</span><strong>' + money(m, a.buy) + '</strong><em>' + esc(a.qty || '') + '</em></div>' +
         '<div class="box b"><span>손절가</span><strong>' + money(m, a.stop) + '</strong><em>' + (a.loss ? '닿으면 손실 -' + money(m, a.loss) : '') + '</em></div></div>' +
         '<ol class="steps">' + steps.map(function (s, i) { return '<li><i>' + (i + 1) + '</i><span>' + s + '</span></li>'; }).join('') + '</ol></section>');
       var miss = a.misses || [], passN = (a.total || 0) - miss.filter(function (x) { return x !== '🟢연속손실'; }).length;
@@ -280,11 +287,11 @@
       out.push('<section class="card"><div class="line"><h2>안정성</h2>' + chip(a) + '</div><ul class="checks">' +
         miss.map(function (x) { return '<li>' + ICON.no + esc(MISS[x] || x) + '</li>'; }).join('') +
         (passN > 0 ? '<li>' + ICON.ok + (miss.length ? '나머지 ' + passN + '개 통과' : passN + '개 모두 통과') + '</li>' : '') + '</ul>' + hist +
-        '<div class="line"><span>안전도 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
+        '<div class="line"><span>신호 점수 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
     } else {
       out.push('<section class="card"><h2>보유 중이라면</h2><ol class="steps">' +
-        (a.rebound ? '<li><i>1</i><span>지금 팔거나, <b>' + money(m, a.rebound) + '</b>까지 반등하면 팔아요</span></li>' : '<li><i>1</i><span>가까운 반등 자리가 없어서 <b>지금 매도</b>를 권해요</span></li>') +
-        '<li><i>2</i><span>다시 살 때는 🔴 매수 알림이 올 때만 사요</span></li></ol><div class="line"><span>안전도 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
+        (a.rebound ? '<li><i>1</i><span>지금 팔거나, <b>' + money(m, a.rebound) + '</b>까지 반등하면 팔아요</span></li>' : '<li><i>1</i><span>가까운 반등 자리가 없어요. 보유 중이라면 <b>지금 매도</b>를 참고하세요</span></li>') +
+        '<li><i>2</i><span>다시 살 때는 🔴 매수 알림이 올 때만 사요</span></li></ol><div class="line"><span>신호 점수 (지표 10가지)</span><b>' + a.score + '/10</b></div></section>');
     }
     out.push('<a class="btn" href="https://tossinvest.com" target="_blank" rel="noopener">증권 앱에서 보기</a>' +
       '<p class="foot-note">투자 참고용 정보이며 투자자문·매매 권유가 아니에요. 개별 상담과 자금 운용은 하지 않아요. 원금 손실이 생길 수 있고, 과거 성적은 미래 수익을 보장하지 않아요.</p>');
@@ -319,7 +326,7 @@
       }).join('') + '</section>';
     }).join('') : '<p class="empty">' + (span === 'week' ? '지난 7일 동안 끝난 거래가 없어요.' : '아직 끝난 거래가 없어요. 베타 알림 결과가 쌓이면 여기에 나와요.') + '</p>';
     return '<div class="seg" role="group" aria-label="기간"><button data-act="span" data-v="week" class="' + (span === 'week' ? 'on' : '') + '">지난 7일</button><button data-act="span" data-v="all" class="' + (span === 'all' ? 'on' : '') + '">전체</button></div>' +
-      '<p class="foot-note" style="margin:0 4px">보낸 매수 알림대로 안전 매수가에 100만원씩 샀다고 치고 계산했어요.</p>' + rows +
+      '<p class="foot-note" style="margin:0 4px">보낸 매수 알림대로 매수 기준가에 100만원씩 샀다고 치고 계산했어요.</p>' + rows +
       (lv ? '<p class="small" style="margin:0 4px">보유 중 ' + lv.held + '개 · 매수가 기다리는 중 ' + lv.waiting + '개' + (lv.paused && lv.paused.length ? ' · 연속 손실로 🟢를 낮춘 시장: ' + lv.paused.map(function (x) { return MARKET[x]; }).join(', ') : '') + '</p>' : '');
   }
   function pageRecord() {
@@ -342,7 +349,7 @@
     var denied = pushOK && Notification.permission === 'denied' ? '<p class="warn">이 휴대폰에서 알림이 차단돼 있어요. 휴대폰 설정 → 알림에서 타점노트(또는 브라우저)를 허용해 주세요.</p>' : '';
     var hints = { '높음': '6가지 안정성 항목을 모두 통과한 매수 알림만 받아요. 알림이 드물어요.',
       '보통': '안정성 높음·보통 매수 알림을 받아요. 3개 이상 부족한 낮음은 빼요.',
-      '낮음': '안전도 기준을 넘으면 등급과 상관없이 모두 받아요. 낮음은 손실 위험이 더 커요.' };
+      '낮음': '신호 점수 기준을 넘으면 등급과 상관없이 모두 받아요. 낮음은 손실 위험이 더 커요.' };
     var c = code();
     return top('<h1 style="margin:0;font-size:20px">알림 설정</h1>', '', demoBar()) + '<main class="page">' + help + denied +
       '<section class="list">' + sw('push', on, '푸시 알림 받기', S.busy ? '켜는 중…' : (on ? '켜져 있어요' : '타점이 생기면 바로 알려 드려요'), S.busy) +
@@ -388,7 +395,7 @@
     sell: function () { var p = prefs(); p.sell = !p.sell; savePrefs(p); },
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
-    logout: function () { if (pushOn()) disablePush(); store.del(K.code); S.feed = null; S.open = false; location.hash = '#/'; render(); }
+    logout: function () { if (pushOn()) disablePush(); store.del(K.code); store.del(K.feed); S.feed = null; S.open = false; location.hash = '#/'; render(); }
   };
   ['kr', 'us', 'crypto'].forEach(function (m) {
     ACT['mk-' + m] = function () {
@@ -423,7 +430,7 @@
   window.addEventListener('hashchange', render);
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') loadFeed(); });
   setInterval(function () { if (document.visibilityState === 'visible' && !/settings|alert/.test(location.hash)) loadFeed(); }, 60000);
-  if (pushOK && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('sw.js').catch(function () {});
   }
 
