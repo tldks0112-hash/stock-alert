@@ -1,8 +1,8 @@
-# 2년 모의투자 — "알림이 올 때마다 100만원씩 샀다면 얼마를 벌었을까?"
-# 최근 약 2년치 1시간봉으로, 실시간 알림과 똑같은 안전가·안전도 10점 계산을 돌려요.
+# 과거 모의투자 — "알림이 올 때마다 100만원씩 샀다면 얼마를 벌었을까?"
+# 최근 1시간봉 730거래일치(국장·미장 약 3년, 코인 약 2년)로, 실시간 알림과 똑같은 안전가·안전도 10점 계산을 돌려요.
 # 손실 방지 장치(시장 필터·추세 필수·눌림 매수·반 매도)를 하나씩 켰을 때, 전부 켰을 때,
 # 그리고 '성적표'(과거에 수익 난 자리만)와 '연속 손실 자동 멈춤'까지 켰을 때를 비교하고,
-# 새 알림 설정이 앞 1년·뒤 1년 모두 통했는지(안정성)도 같이 봐요. 결과는
+# 새 알림 설정이 기간 앞 절반·뒤 절반 모두 통했는지(안정성)도 같이 봐요. 결과는
 # 돈(만원)으로 바꾸고, 그냥 들고 있었을 때와 나란히 카톡으로만 보내요.
 # 공개 실행 기록에는 종목 수만 남겨요.
 # 표·그래프로 된 결과 페이지 파일도 만들어요 (_site 폴더, 지금은 카톡 버튼과 연결 안 함).
@@ -276,7 +276,7 @@ def grade_trades(history, market):
 
 
 def make_card():
-    """실시간 알림용 성적표: 종목별·시장 전체의 지난 2년 거래 성적 (종목 이름은 코드로)"""
+    """실시간 알림용 성적표: 종목별·시장 전체의 과거 거래 성적 (종목 이름은 코드로)"""
     out, done, wanted = {"markets": {}, "earn": {}}, 0, 0
     for market, cats in rt.MARKETS.items():
         tickers = [t for group in cats.values() for t in group]
@@ -441,6 +441,22 @@ def bar(value, biggest):
     return ("🟥" if value > 0 else "🟦") * n
 
 
+def years(span):
+    """백테스트 기간 → '약 3년' (1시간봉 730거래일이라 주식은 약 3년, 코인은 약 2년)"""
+    if not span or span[0] is None:
+        return "과거"
+    y = (span[1] - span[0]).days / 365.25
+    return f"약 {round(y * 2) / 2:g}년"
+
+
+def periods(results):
+    """시장별 기간을 묶어서: '국장·미장 약 3년, 코인 약 2년'"""
+    groups = {}
+    for market, r in results.items():
+        groups.setdefault(years(r.get("span")), []).append(rt.MARKET_NAME[market].split()[-1])
+    return ", ".join(f"{'·'.join(v)} {k}" for k, v in groups.items())
+
+
 def market_result(r):
     """(방법, 기준)별 거래 수·이긴 수·총손익(만원)과 같은 기간 보유 손익"""
     rows = {}
@@ -454,7 +470,7 @@ def market_result(r):
 
 def build_messages(results):
     msgs = pack([
-        "📊 손실 방지 2년 모의투자",
+        f"📊 손실 방지 모의투자 ({periods(results)})",
         "알림마다 100만원씩 샀다고 치고 방법별로 비교했어요.",
         "① 예전 알림 (장치 없음)",
         "②~⑤ 장치를 하나씩만 켬",
@@ -468,7 +484,7 @@ def build_messages(results):
     for market, r in results.items():
         name, cur = rt.MARKET_NAME[market], r["cur"]
         rows, hold_total, n_hold = market_result(r)
-        lines = [f"{name} 2년 손익 ({cur}점·{n_hold}종목)"]
+        lines = [f"{name} {years(r['span'])} 손익 ({cur}점·{n_hold}종목)"]
         if hold_total is not None:
             lines.append(f"그냥 보유 {won(hold_total)}")
         for sid, title, _ in r["strats"]:
@@ -495,7 +511,7 @@ def build_messages(results):
         msgs += pack(grade_lines(market, r), 200)
         verdicts.append(verdict(name, rows, hold_total, cur, r["strats"], r["live"]) + grade_verdict(r))
 
-    blocks = ["🧪 ⭐ 안정성 검사 (100만원씩)\n앞1년·뒤1년 둘 다 수익이면 ✅"]
+    blocks = ["🧪 ⭐ 안정성 검사 (100만원씩)\n기간 앞 절반·뒤 절반 둘 다 수익이면 ✅"]
     blocks += ["\n".join(stability_lines(market, r)) for market, r in results.items()]
     msgs += pack(blocks, 200)                     # 시장별 묶음은 쪼개지지 않게
 
@@ -531,7 +547,7 @@ def grade_stats(r):
 
 def grade_lines(market, r):
     st = grade_stats(r)
-    lines = [f"{rt.MARKET_NAME[market]} 안정성 등급별 2년 손익", f"({r['cur']}점 이상 알림 전부 · 100만원씩)"]
+    lines = [f"{rt.MARKET_NAME[market]} 안정성 등급별 {years(r['span'])} 손익", f"({r['cur']}점 이상 알림 전부 · 100만원씩)"]
     for g, x in st.items():
         icon = rt.GRADE_ICON[g]
         if x:
@@ -590,7 +606,7 @@ def all_verdicts(results):
 
 def build_short(results):
     """카톡엔 요약만 (설정 "점검_카톡_전체": false 일 때): 시장별 한 줄 + 결론"""
-    lines = ["📊 2년 가상 시뮬레이션 업데이트", "알림마다 100만원씩 샀다고 치면"]
+    lines = [f"📊 가상 시뮬레이션 업데이트 ({periods(results)})", "알림마다 100만원씩 샀다고 치면"]
     for market, r in results.items():
         rows, hold_total, _ = market_result(r)
         new, old = rows.get((r["live"], r["cur"])), rows.get(("①", r["cur"]))
@@ -663,7 +679,7 @@ def market_section(market, r):
 
     out = [f'<section><h2>{e(name)} <small>{n_hold}종목 · 기준 {cur}점</small></h2><div class="kpis">']
     out.append(kpi("⭐ 새 알림", new["total"] if new else None,
-                   f'{new["n"]}번 · 승률 {new["win"] / new["n"] * 100:.0f}%' if new else "2년간 매수 없음"))
+                   f'{new["n"]}번 · 승률 {new["win"] / new["n"] * 100:.0f}%' if new else f"{years(r['span'])}간 매수 없음"))
     out.append(kpi("예전 알림", old["total"] if old else None,
                    f'{old["n"]}번 · 승률 {old["win"] / old["n"] * 100:.0f}%' if old else ""))
     out.append(kpi("그냥 보유", hold_total, f"{n_hold}종목 100만원씩"))
@@ -672,10 +688,10 @@ def market_section(market, r):
     if r["span"][0] is not None:
         series = [("⭐ 새 알림", "var(--star)", False, [(x["tx"], x["ret"] * UNIT) for x in r["live_trades"]]),
                   ("예전 알림", "var(--old)", True, [(x["tx"], x["ret"] * UNIT) for x in r["old_trades"]])]
-        out.append('<h3>2년 동안 쌓인 손익 (만원)</h3>' + cum_chart(series, r["span"]))
+        out.append(f'<h3>{years(r["span"])} 동안 쌓인 손익 (만원)</h3>' + cum_chart(series, r["span"]))
 
     biggest = max([abs(x["total"]) for x in rows.values()] + [1])
-    out.append('<h3>방법별 비교</h3><table><tr><th>방법</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
+    out.append('<h3>방법별 비교</h3><table><tr><th>방법</th><th>손익</th><th>승률</th><th>거래</th></tr>')
     for sid, title, _ in r["strats"]:
         x = rows.get((sid, cur))
         star = " ⭐" if sid == live else ""
@@ -689,7 +705,7 @@ def market_section(market, r):
                    f'<td>{x["win"] / x["n"] * 100:.0f}%</td><td>{x["n"]}번</td></tr>')
     out.append("</table>")
 
-    out.append('<h3>⭐ 새 알림 신호 점수 기준별</h3><table><tr><th>기준</th><th>2년 손익</th><th>승률</th><th>거래</th></tr>')
+    out.append('<h3>⭐ 새 알림 신호 점수 기준별</h3><table><tr><th>기준</th><th>손익</th><th>승률</th><th>거래</th></tr>')
     for k in r["ks"]:
         x = rows.get((live, k))
         mark = " ← 지금" if k == cur else ""
@@ -719,7 +735,7 @@ def build_report(results, made):
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>2년 가상 시뮬레이션</title>
+<title>가상 시뮬레이션</title>
 <style>
 :root{{--bg:#f6f7f9;--card:#fff;--ink:#191f28;--mut:#8b95a1;--line:#e5e8eb;--pos:#f04452;--neg:#3182f6;
 --star:#f04452;--old:#8b95a1;--hl:#fff7e6}}
@@ -752,8 +768,8 @@ ul.st{{margin:0;padding-left:18px;font-size:13px}}
 .verdict{{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--bg);font-size:13px}}
 footer{{color:var(--mut);font-size:12px;padding:8px 4px 30px}}
 </style></head><body><main>
-<header><h1>📊 2년 가상 시뮬레이션</h1>
-<p>{made:%Y-%m-%d %H:%M} 기준 · 알림이 올 때마다 100만원씩 매수 기준가에 샀다고 치고 지난 2년을 다시 돌려 봤어요.
+<header><h1>📊 가상 시뮬레이션</h1>
+<p>{made:%Y-%m-%d %H:%M} 기준 · 알림이 올 때마다 100만원씩 매수 기준가에 샀다고 치고 과거({periods(results)})를 다시 돌려 봤어요.
 수수료 {FEE * 100:.1f}% 포함 · 수익은 빨강, 손실은 파랑</p></header>
 {body}
 <section><h2>🔵 매도 알림이 맞았나?</h2><p class="mut" style="margin:0 0 6px;font-size:13px">
@@ -798,7 +814,7 @@ def stability_lines(market, r):
     cap = (rt.MAX_LOSS_USD / rt.BUDGET_USD) if market == "us" else (rt.MAX_LOSS_KRW / rt.BUDGET_KRW)
     full = [x["ret"] * UNIT for x in seq]
     sized = [x["ret"] * UNIT * min(1.0, cap / max(x.get("risk", cap), 1e-9)) for x in seq]
-    return [f"{name} 앞1년 {won(a)} · 뒤1년 {won(b)} {mark}",
+    return [f"{name} 앞 절반 {won(a)} · 뒤 절반 {won(b)} {mark}",
             f" 최대낙폭 {won(drawdown(full))} · 연속손실 최대 {longest}번",
             f" 손절 {cap * UNIT:.0f}만원 제한 시 {won(sum(sized))} · 낙폭 {won(drawdown(sized))}"]
 
@@ -808,7 +824,7 @@ def verdict(name, rows, hold_total, cur, strats, live):
     titles = {sid: title for sid, title, _ in strats}
     new, old = rows.get((live, cur)), rows.get(("①", cur))
     if not new:
-        line = f"{name}: 새 설정은 2년간 매수 0번 (손실도 0)"
+        line = f"{name}: 새 설정은 기간 내 매수 0번 (손실도 0)"
     else:
         line = f"{name}: 새 설정 {won(new['total'])}" + (f" (예전 {won(old['total'])})" if old else "")
         if old and abs(new["total"] - old["total"]) < 1:
