@@ -1,0 +1,49 @@
+name: 푸시 키 만들기 (처음 1번)
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "이미 있어도 새로 만들기 (켜 둔 휴대폰 알림이 모두 끊겨요)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 키 만들고 비밀값에 저장
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if gh secret list --repo "$GITHUB_REPOSITORY" | grep -q '^VAPID_PUBLIC_KEY'; then
+            if [ "$FORCE" != "true" ]; then
+              echo "이미 푸시 키가 있어서 그대로 둘게요."
+              exit 0
+            fi
+          fi
+          pip install -q cryptography
+          python - <<'PY'
+          import base64
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric import ec
+          k = ec.generate_private_key(ec.SECP256R1())
+          raw = k.private_numbers().private_value.to_bytes(32, "big")
+          pub = k.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+          b64 = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+          open("/tmp/vpriv", "w").write(b64(raw))
+          open("/tmp/vpub", "w").write(b64(pub))
+          PY
+          gh secret set VAPID_PRIVATE_KEY --repo "$GITHUB_REPOSITORY" < /tmp/vpriv
+          gh secret set VAPID_PUBLIC_KEY --repo "$GITHUB_REPOSITORY" < /tmp/vpub
+          rm -f /tmp/vpriv /tmp/vpub
+          echo "푸시 키를 만들어 저장했어요. 이제 '앱 배포'를 실행해 주세요."
