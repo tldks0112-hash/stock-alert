@@ -71,6 +71,7 @@ MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
 INDEX = {"kr": "069500.KS", "us": "SPY", "crypto": "BTC-KRW"}           # 시장 필터에 쓰는 대표 지수
 GUARD_DEFAULT = {"시장_필터": True, "추세_필수": True, "눌림_매수": True, "변동성_필터": True,
                  "실적_피하기": True, "반_매도": True, "하루_한번": True, "성적표": True, "자동_멈춤": True}
+REBOUND_ATR = 1.5                                                       # 매도 알림: 반등해도 ATR 1.5배 안쪽 저항까지만
 TRAIL_ATR = 2.0                                                         # 반 매도 후 나머지: 고점에서 ATR 2배 빠지면 매도
 STATE_DIR = ".alert_state"
 STATE_FILE = os.path.join(STATE_DIR, "sent.json")
@@ -271,9 +272,11 @@ def tick_round(market, x, down=False):
     return round(float(f(x / step) * step), 8)
 
 
-def cluster(levels, price, atr, below):
-    """price 아래(또는 위)의 지지/저항 후보 중, 가장 가까우면서 여러 개가 겹치는 곳"""
-    cands = sorted([x for x in levels if np.isfinite(x) and (x < price * 0.999 if below else x > price * 1.001)],
+def cluster(levels, price, atr, below, max_dist=None):
+    """price 아래(또는 위)의 지지/저항 후보 중, 가장 가까우면서 여러 개가 겹치는 곳
+    max_dist: 현재가에서 이만큼(가격) 안에 있는 것만 봄"""
+    cands = sorted([x for x in levels if np.isfinite(x) and (x < price * 0.999 if below else x > price * 1.001)
+                    and (max_dist is None or abs(x - price) <= max_dist)],
                    reverse=below)
     if not cands:
         return None
@@ -305,6 +308,7 @@ def safe_levels(market, d, h, m, same_day):
 
     sup = cluster(levels, price, atr, below=True)
     res = cluster(levels, price, atr, below=False)
+    near = cluster(levels, price, atr, below=False, max_dist=REBOUND_ATR * atr)   # 매도 알림의 '반등 시 매도가'
     buy = sup["price"] if sup else price - atr
     stop = (sup["edge"] if sup else buy) - STOP_ATR * atr
     risk = max(buy - stop, 1e-9)
@@ -316,7 +320,8 @@ def safe_levels(market, d, h, m, same_day):
             "buy": tick_round(market, buy), "buy_n": sup["n"] if sup else 0,
             "stop": tick_round(market, stop, down=True),
             "sell": tick_round(market, sell), "rr": (sell - buy) / risk,
-            "res": tick_round(market, res["price"]) if res else None, "res_n": res["n"] if res else 0}
+            "res": tick_round(market, res["price"]) if res else None, "res_n": res["n"] if res else 0,
+            "res_near": tick_round(market, near["price"]) if near else None}
 
 
 # ---------- 안전도 10점 ----------
@@ -550,7 +555,7 @@ def label(market, ticker, names):
     return f"{names[ticker]} {ticker}" if market == "us" else names[ticker]
 
 
-def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None, rebuy=True):
+def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None):
     when = trig["time"].astimezone(KST).strftime("%H:%M")
     p = lv["price"]
     head = "🔴 매수" if side == "buy" else "🔵 매도"
@@ -572,11 +577,14 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
         else:
             lines += [f"🔵 안전 매도가 {money(market, lv['sell'])} (손익비 {lv['rr']:.1f})"]
     else:
-        res = lv["res"] if lv["res"] else p
-        lines += [f"현재가 {money(market, p)}",
-                  f"🔵 안전 매도가 {money(market, res)} (반등 시)",
-                  f"🔴 재매수 안전가 {money(market, lv['buy'])}" if rebuy else "재매수는 🔴 매수 알림 올 때만",
-                  "보유 중이면 지금 또는 반등 때 매도"]
+        near = lv.get("res_near")
+        lines.append(f"현재가 {money(market, p)}")
+        if near:
+            lines += [f"🔵 반등하면 {money(market, near)}에서 매도 (+{(near / p - 1) * 100:.1f}%)",
+                      "보유 중이면 지금 또는 반등 때 매도"]
+        else:
+            lines.append("🔵 보유 중이면 지금 매도")
+        lines.append("재매수는 🔴 매수 알림 올 때만")
     optional = [f"현재가 {money(market, p)}"] if side == "buy" else []   # 200자를 넘으면 아래쪽 줄부터 뺌
     if market == "kr":
         optional.append("⚠️ 국장 시세 지연 가능")
@@ -885,7 +893,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             alerts.append({"key": key, "market": market, "category": category[t], "name": names[t],
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
-                                                hist, rebuy=card_ok)})
+                                                hist)})
     if not found:
         log(f"{t}: 확정된 타점 없음")
 

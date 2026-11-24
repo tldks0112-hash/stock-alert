@@ -5,7 +5,7 @@
 # 새 알림 설정이 앞 1년·뒤 1년 모두 통했는지(안정성)도 같이 봐요. 결과는
 # 돈(만원)으로 바꾸고, 그냥 들고 있었을 때와 나란히 카톡으로만 보내요.
 # 공개 실행 기록에는 종목 수만 남겨요.
-# 표·그래프로 된 결과 페이지도 만들어요 (카톡 '가상 시뮬레이션' 버튼이 여는 숨은 주소의 페이지).
+# 표·그래프로 된 결과 페이지 파일도 만들어요 (_site 폴더, 지금은 카톡 버튼과 연결 안 함).
 # 페이지에는 종목 이름 없이 시장별 결과만 들어가요.
 #
 #   python backtest_check.py           → 계산 + 카톡 보내기 ('점검 작업'이 씀)
@@ -350,7 +350,7 @@ def main():
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write('<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>.</title>')
 
-    full = base.SETTINGS.get("점검_카톡_전체", False)                # true면 예전처럼 카톡으로 전부 받기
+    full = base.SETTINGS.get("점검_카톡_전체", True)                 # false면 카톡엔 요약만
     messages = build_messages(results) if full else build_short(results)
     if preview:
         print("\n\n".join(messages))
@@ -495,7 +495,7 @@ def all_verdicts(results):
 
 
 def build_short(results):
-    """카톡엔 요약만: 시장별 한 줄 + 결론. 표·그래프는 '가상 시뮬레이션' 버튼 페이지에서"""
+    """카톡엔 요약만 (설정 "점검_카톡_전체": false 일 때): 시장별 한 줄 + 결론"""
     lines = ["📊 2년 가상 시뮬레이션 업데이트", "알림마다 100만원씩 샀다고 치면"]
     for market, r in results.items():
         rows, hold_total, _ = market_result(r)
@@ -506,7 +506,6 @@ def build_short(results):
         if hold_total is not None:
             part.append(f"보유 {won(hold_total)}")
         lines.append(f"{rt.MARKET_NAME[market]} " + " · ".join(part))
-    lines.append("👇 '가상 시뮬레이션'을 누르면 표·그래프로 봐요")
     return pack(lines, 200) + pack(["🧭 결론"] + all_verdicts(results) + notes(results))
 
 

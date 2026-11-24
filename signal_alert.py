@@ -40,7 +40,7 @@ BUDGET_PER_STOCK_USD = SETTINGS.get("종목당_달러", 100)
 RULE = dict(ma_s=20, ma_l=50, rsi_buy=70, rsi_sell=80, trend=True, sl=0.07)
 RULE.update(SETTINGS.get("아침_규칙", {}))
 ONLY_WHEN_SIGNAL = SETTINGS.get("신호_있는_날만", False)
-BUTTON_TITLE = "가상 시뮬레이션"        # 카톡 아래 버튼 이름 (카카오 권장: 8자 이하)
+BUTTON_TITLE = "확인"                  # 카톡 아래 버튼 이름 (카카오 규칙상 버튼은 꼭 하나 있어야 해서 가장 짧게)
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -65,16 +65,7 @@ def report_key():
     return hashlib.sha256(("sim|" + REST_KEY).encode()).hexdigest()[:20] if REST_KEY else "report"
 
 
-def report_url():
-    """카톡 버튼을 누르면 열리는 2년 가상 시뮬레이션 표·그래프 페이지 (GitHub Pages)"""
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if "/" not in repo:
-        return "https://tossinvest.com"
-    owner, name = repo.split("/", 1)
-    return f"https://{owner.lower()}.github.io/{name}/{report_key()}.html"
-
-
-LINK_URL = report_url()
+LINK_URL = "https://tossinvest.com"     # '확인'을 누르면 열리는 곳 (카카오에 등록된 주소여야 함)
 
 
 # ---------- 신호 계산 (5단계와 같은 규칙) ----------
