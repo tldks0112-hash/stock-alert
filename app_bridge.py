@@ -22,7 +22,7 @@ KEY = _clean(os.environ.get("SUPABASE_SECRET_KEY"))
 VAPID_PRIVATE = _clean(os.environ.get("VAPID_PRIVATE_KEY"))
 KST = ZoneInfo("Asia/Seoul")
 GRADE_RANK = {"낮음": 0, "보통": 1, "높음": 2}
-DEFAULT_PREFS = {"markets": ["kr", "us", "crypto"], "minGrade": "보통", "sell": True, "quiet": False}
+DEFAULT_PREFS = {"markets": ["kr", "us", "crypto"], "minGrade": "보통", "sell": True, "sellAll": False, "quiet": False}
 
 
 def enabled():
@@ -132,6 +132,8 @@ def wants(prefs, alert, now):
         return False
     if alert["side"] == "sell" and not p["sell"]:
         return False
+    if alert["side"] == "sell" and not p.get("sellAll") and not (alert.get("flags") or {}).get("linked"):
+        return False                                          # 기본: 최근 매수 알림·실전 보유 종목만
     rule = (p.get("rules") or {}).get(alert["market"])
     if rule:                                                  # 새 설정: 지표 켜고 끄기 / 추천 설정
         if not passes(alert, rule):

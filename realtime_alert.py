@@ -70,6 +70,8 @@ NY = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")
 MARKETS = {"kr": KR_STOCKS, "us": US_STOCKS, "crypto": COINS}          # 카톡도 이 순서로 와요
 MARKET_NAME = {"kr": "🇰🇷 국장", "us": "🇺🇸 미장", "crypto": "🪙 코인"}
+SELL_ALL = bool(S.get("매도_전부", False))   # 카톡 매도 알림: 기본은 최근 7일 매수 알림·실전 보유 종목만
+SELL_LINK_DAYS = 7
 BRIEF = S.get("아침_브리핑", True)            # 매일 아침 8시쯤(일요일 빼고) 카톡 한 통 + 앱 첫 화면 카드
 KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요약만, 자세한 기준가는 앱에서 / False: 예전처럼 종목별 자세히
 APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
@@ -1053,14 +1055,28 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
         stats["checked"] += 1
         try:
             check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts, mkt_ok, card,
-                         paused)
+                         paused, book)
         except Exception as e:
             stats["failed"] += 1
             log(f"{t}: 확인 실패 ({e})")
 
 
+def sell_linked(state, book, t, now):
+    """매도 알림을 보낼 만한 종목인가: 실전 기록에 보유 중이거나, 최근 7일 안에 매수 알림이 나간 종목"""
+    h = hid(t)
+    if any(tr.get("id") == h and tr.get("st") in ("p1", "p2") for tr in (book or {}).get("open", [])):
+        return True
+    for k in (f"app|{h}|buy", f"tajum|{h}|buy"):
+        try:
+            if state.get(k) and now - datetime.fromisoformat(state[k]) < timedelta(days=SELL_LINK_DAYS):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 def check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts, mkt_ok=True,
-                 card=None, paused=False):
+                 card=None, paused=False, book=None):
     d, m = daily.get(t), minute.get(t)
     if d is None or len(d) < 220 or m is None:
         log(f"{t}: 데이터 부족 → 건너뜀")
@@ -1107,11 +1123,15 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
                 blocked.append(f"점검 {stab[0]} (설정한 최소 {MIN_GRADE})")
             if position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
                 hard.append("손절폭이 손실 한도보다 큼")
+        else:
+            flags = {"linked": sell_linked(state, book, t, now)}
         once = side == "buy" and guard_on(market, "하루_한번")
         to_kakao, to_app_ = False, False
         k_rule = (KAKAO_RULES or {}).get(market)
         if in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
+        elif side == "sell" and not SELL_ALL and not flags["linked"]:
+            log(f"{t}: 매도 타점 {score}/10 · 보유·최근 매수 알림 없는 종목이라 카톡 안 함")
         elif k_rule is not None:                 # 카톡도 추천 설정(시장별 지표 조건)대로
             if hard:
                 log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(hard)})")
