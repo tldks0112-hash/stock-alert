@@ -10,7 +10,24 @@
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
   var GRADE_RANK = { '낮음': 0, '보통': 1, '높음': 2 };
-  var DEFAULT_PREFS = { markets: ['kr', 'us', 'crypto'], minGrade: '보통', sell: true, quiet: false };
+  var DEFAULT_PREFS = { markets: ['kr', 'us', 'crypto'], minGrade: '보통', sell: true, quiet: false, preset: '', rules: null };
+  // 매수 알림 조건: 안정성 지표 5가지 + 수익성 지표 1가지 + 신호 점수
+  var GUARDS = [
+    ['시장', '시장 흐름 좋을 때만', '대표 지수(코스피200·S&P500·비트코인)가 200일선 위일 때만'],
+    ['추세', '상승 추세 종목만', '주가와 50일선이 200일선 위에 있을 때만'],
+    ['눌림', '눌림에서만', '이미 많이 오른 자리는 빼고, 잠깐 내려왔을 때만'],
+    ['변동성', '변동성 클 때 피하기', '평소보다 크게 흔들리는 때는 빼요'],
+    ['실적', '실적 발표 앞두고 피하기', '미장만 · 실적 발표 10일 전부터 빼요']];
+  var PROFIT = ['성적', '과거 성적 좋은 자리만', '같은 종목(기록이 적으면 같은 시장)의 지난 알림이 평균 +0.3% 이상일 때만'];
+  var SCORES = [5, 6, 7, 8];
+  var MISS_OF = { '시장': '시장약세', '추세': '추세약세', '눌림': '이미오름', '변동성': '변동큼', '실적': '실적임박' };
+  var FALLBACK_PRESETS = [
+    { id: '추천', label: '추천', desc: '지난 2년 백테스트에서 가장 고르게 좋았던 조합이에요.',
+      rules: { kr: { score: 6, need: ['시장', '추세'], card: false }, us: { score: 6, need: ['시장', '추세'], card: false }, crypto: { score: 6, need: ['시장', '추세'], card: false } } },
+    { id: '안정', label: '안정 우선', desc: '손실 위험을 줄이려고 조건을 많이 켰어요. 알림이 드물어요.',
+      rules: { kr: { score: 7, need: ['시장', '추세', '눌림', '변동성', '실적'], card: true }, us: { score: 7, need: ['시장', '추세', '눌림', '변동성', '실적'], card: true }, crypto: { score: 7, need: ['시장', '추세', '눌림', '변동성'], card: true } } },
+    { id: '기회', label: '기회 많이', desc: '조건을 줄여 알림을 많이 받아요. 손실도 더 자주 나요.',
+      rules: { kr: { score: 5, need: [], card: false }, us: { score: 5, need: [], card: false }, crypto: { score: 5, need: [], card: false } } }];
   var NOTICES = [
     ['투자 참고용 정보예요', '이 앱의 타점과 가격은 투자 판단을 돕는 참고 정보이며, 투자자문이나 매매 권유가 아니에요.'],
     ['개별 상담과 자금 운용은 하지 않아요', '종목별 1:1 상담, 계좌 대리 운용, 매매 대행은 제공하지 않아요.'],
@@ -18,7 +35,7 @@
     ['과거 성적은 미래 수익을 보장하지 않아요', '성적표와 시뮬레이션은 지난 데이터로 계산한 결과예요. 서비스 제공자는 금융투자업자가 아니에요.']
   ];
   var S = { feed: null, loading: false, error: '', tab: 'all', rec: 'sim', agree: [false, false, false, false],
-    codeErr: '', busy: false, pushHelp: false, open: null, agreedNow: false };   // agreedNow: 이번에 앱을 연 뒤 동의했는지 (앱을 열 때마다 안내·동의 화면)
+    codeErr: '', busy: false, pushHelp: false, open: null, agreedNow: false, cm: 'kr' };   // agreedNow: 이번에 앱을 연 뒤 동의했는지 (앱을 열 때마다 안내·동의 화면)
   var OPEN_CODE = 'OPEN';   // 서버에 이 코드가 켜져 있으면 초대 코드 없이 바로 들어가요
 
   // ---------- 작은 도구 ----------
@@ -96,6 +113,10 @@
     S.loading = true;
     return rpc('app_feed', { p_code: code(), p_days: 3 }).then(function (f) {
       S.feed = f; S.error = ''; S.offline = false;
+      if (store.get(K.prefs, null) === null) {                       // 처음 쓰는 사람은 추천 설정으로 시작
+        var ps = findPreset('추천');
+        if (ps) { var np = prefs(); np.preset = '추천'; np.rules = clone(ps.rules); store.set(K.prefs, np); }
+      }
       var keep = {}; for (var k in f) keep[k] = f[k];
       keep.alerts = (f.alerts || []).slice(0, 60); store.set(K.feed, keep);   // 인터넷이 끊겼을 때 보여 줄 마지막 내용
     }).catch(function (e) {
@@ -166,6 +187,60 @@
     }, 600);
   }
 
+  // ---------- 매수 알림 조건 (서버 app_bridge.passes 와 같은 규칙) ----------
+  function presetList() { var x = S.feed && S.feed.presets; return (x && x.list && x.list.length) ? x.list : FALLBACK_PRESETS; }
+  function findPreset(id) { return presetList().filter(function (x) { return x.id === id; })[0]; }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function baseRules(p) {                  // 직접 설정은 지금 쓰던 조건(없으면 추천)에서 시작
+    if (p.rules) return clone(p.rules);
+    var ps = findPreset('추천');
+    return ps ? clone(ps.rules) : { kr: { score: 6, need: [], card: false }, us: { score: 6, need: [], card: false }, crypto: { score: 6, need: [], card: false } };
+  }
+  function customOf(p) {
+    var r = baseRules(p)[S.cm] || { score: 6, need: [], card: false };
+    return { score: r.score || 6, need: (r.need || []).slice(), card: !!r.card };
+  }
+  function passes(a, rule) {
+    if ((a.score || 0) < (rule.score || 6)) return false;
+    if (a.side !== 'buy') return true;
+    var f = a.flags && typeof a.flags === 'object' ? a.flags : null, miss = a.misses || [];
+    for (var i = 0; i < (rule.need || []).length; i++) {
+      var g = rule.need[i], ok = f ? (g in f ? !!f[g] : true) : miss.indexOf(MISS_OF[g]) < 0;
+      if (!ok) return false;
+    }
+    if (rule.card && !(f ? !!f['성적'] : (miss.indexOf('과거손실') < 0 && miss.indexOf('기록부족') < 0))) return false;
+    return true;
+  }
+  function shown(a, p) {
+    if (a.side === 'sell' && !p.sell) return false;
+    var rule = p.rules && p.rules[a.market];
+    if (rule) return passes(a, rule);
+    if ((a.score || 0) < 6) return false;                                       // 예전 설정: 등급만
+    return a.side !== 'buy' || GRADE_RANK[a.grade || '높음'] >= GRADE_RANK[p.minGrade || '보통'];
+  }
+  function ruleText(r, market) {
+    var need = (r.need || []).filter(function (g) { return market === 'us' || g !== '실적'; });
+    return (need.length ? need.join('·') : '안정성 조건 없음') + (r.card ? ' · 과거 성적' : '') + ' · 신호 ' + r.score + '점 이상';
+  }
+  function resultLine(mk, x) {
+    if (!x || !x.n) return '<div class="line"><span>' + MARKET[mk] + '</span><span class="small">지난 2년 거래 없음</span></div>';
+    var win = Math.round(x.wins / x.n * 100);
+    return '<div class="line"><span>' + MARKET[mk] + ' <small class="small">' + x.n + '번 · 이긴 비율 ' + win + '%</small></span><b class="' + tone(x.total) + '">' + manwon(x.total) + '</b></div>';
+  }
+  function halvesLine(x) {
+    if (!x || !x.n) return '';
+    return '<p class="small" style="margin:0">앞 1년 <b class="' + tone(x.h1) + '">' + manwon(x.h1) + '</b> · 뒤 1년 <b class="' + tone(x.h2) + '">' + manwon(x.h2) + '</b> · 가장 크게 잃은 구간 ' + (x.dd >= 0.1 ? '-' + manwon(x.dd).replace('+', '') : '없음') + '</p>';
+  }
+  function loadResearch() {
+    var c = customOf(prefs()), key = S.cm + JSON.stringify(c);
+    if (S.res && S.res.key === key) return;
+    S.res = { key: key, data: null, loading: LIVE, mk: S.cm };
+    if (!LIVE) return;
+    rpc('app_research', { p_code: code(), p_score: c.score, p_need: c.need, p_card: c.card })
+      .then(function (d) { if (S.res && S.res.key === key) { S.res.data = d || {}; S.res.loading = false; render(); } })
+      .catch(function () { if (S.res && S.res.key === key) { S.res.loading = false; S.res.err = true; render(); } });
+  }
+
   // ---------- 화면 조각 ----------
   function menu(on) {
     function a(id, href, icon, label) { return '<a href="' + href + '" class="' + (on === id ? 'on' : '') + '"' + (on === id ? ' aria-current="page"' : '') + '>' + icon + label + '</a>'; }
@@ -231,8 +306,10 @@
       .then(function () { render(); });
   }
   function pageHome() {
-    var f = S.feed, all = (f && f.alerts) || [];
-    var items = all.filter(function (a) { return S.tab === 'all' || a.market === S.tab; });
+    var f = S.feed, all = (f && f.alerts) || [], pf = prefs();
+    var inTab = all.filter(function (a) { return S.tab === 'all' || a.market === S.tab; });
+    var mine = inTab.filter(function (a) { return shown(a, pf); });
+    var items = S.showAll ? inTab : mine, hidden = inTab.length - mine.length;
     var tabs = [['all', '전체'], ['kr', '국장'], ['us', '미장'], ['crypto', '코인']].map(function (t) {
       return '<button class="tab' + (S.tab === t[0] ? ' on' : '') + '" data-act="tab" data-v="' + t[0] + '" aria-pressed="' + (S.tab === t[0]) + '">' + t[1] + '</button>';
     }).join('');
@@ -244,7 +321,8 @@
     var body = S.error ? '<p class="empty">' + esc(S.error) + '</p>'
       : !f ? '<p class="empty"><span class="spin" style="display:inline-block"></span></p>'
       : items.length ? items.map(card).join('')
-      : '<p class="empty">최근 3일 동안 ' + (S.tab === 'all' ? '' : MARKET[S.tab] + ' ') + '타점이 없어요.<br>타점이 생기면 알림으로 알려 드려요.</p>';
+      : '<p class="empty">최근 3일 동안 ' + (S.tab === 'all' ? '' : MARKET[S.tab] + ' ') + '내 조건에 맞는 타점이 없어요.<br>타점이 생기면 알림으로 알려 드려요.</p>';
+    if (f && !S.error && hidden > 0) body += '<button class="btn ghost" data-act="showall">' + (S.showAll ? '내 조건에 맞는 것만 보기' : '조건에 안 맞아 숨긴 타점 ' + hidden + '건 보기') + '</button>';
     return top('<span class="brand">타점노트<span class="tag">무료 베타</span></span>',
       '<span style="display:flex"><button class="icon-btn" data-act="refresh" aria-label="새로고침">' + ICON.refresh + '</button><a class="icon-btn" href="#/settings" aria-label="알림 설정">' + ICON.bell + '</a></span>',
       '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>') +
@@ -343,23 +421,56 @@
   function sw(act, on, label, hint, disabled) {
     return '<div class="item"><span><b>' + label + '</b><small>' + hint + '</small></span><button class="sw' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" aria-label="' + label + '" data-act="' + act + '"' + (disabled ? ' disabled' : '') + '></button></div>';
   }
+  function condSection(p) {
+    var cur = p.preset || (p.rules ? '직접' : ''), list = presetList();
+    var chips = list.map(function (x) {
+      return '<button role="radio" aria-checked="' + (cur === x.id) + '" class="' + (cur === x.id ? 'on' : '') + '" data-act="preset" data-v="' + esc(x.id) + '">' + esc(x.label) + '</button>';
+    }).join('') + '<button role="radio" aria-checked="' + (cur === '직접') + '" class="' + (cur === '직접' ? 'on' : '') + '" data-act="preset" data-v="직접">직접 설정</button>';
+    var body = '';
+    if (!cur) {
+      body = '<p class="info">아직 조건을 고르지 않았어요. 지금은 안정성 보통 이상 · 신호 6점 이상 매수 알림을 받아요. <b>추천</b>을 눌러 보세요.</p>';
+    } else if (cur !== '직접') {
+      var ps = findPreset(cur) || { desc: '', rules: p.rules || {} }, res = ps.result || {};
+      body = '<p class="small" style="margin:0;line-height:1.6;color:var(--sub)">' + esc(ps.desc || '') + '</p>' +
+        '<div class="rules">' + ['kr', 'us', 'crypto'].map(function (mk) {
+          var r = (p.rules || ps.rules || {})[mk];
+          return r ? '<div class="line"><span>' + MARKET[mk] + '</span><span class="small" style="text-align:right">' + esc(ruleText(r, mk)) + '</span></div>' : '';
+        }).join('') + '</div>' +
+        (Object.keys(res).length ? '<h3 class="sub-h">이 설정으로 지난 2년 (알림마다 100만원씩)</h3>' + ['kr', 'us', 'crypto'].map(function (mk) { return res[mk] ? resultLine(mk, res[mk]) + halvesLine(res[mk]) : ''; }).join('') : '') +
+        '<p class="small" style="margin:0">하나씩 바꾸고 싶으면 <b>직접 설정</b>을 누르세요.</p>';
+    } else {
+      var c = customOf(p);
+      body = '<p class="small" style="margin:0;line-height:1.5">시장마다 잘 맞는 조건이 달라서, 시장별로 따로 정해요.</p>' +
+        '<div class="seg three" role="tablist" aria-label="시장">' + ['kr', 'us', 'crypto'].map(function (mk) {
+          return '<button role="tab" aria-selected="' + (S.cm === mk) + '" class="' + (S.cm === mk ? 'on' : '') + '" data-act="cm" data-v="' + mk + '">' + MARKET[mk] + '</button>';
+        }).join('') + '</div>' +
+        '<h3 class="sub-h">안정성 지표 <small>켜면 그 조건을 통과한 알림만 받아요</small></h3><div class="list inner">' +
+        GUARDS.filter(function (g) { return g[0] !== '실적' || S.cm === 'us'; }).map(function (g) { return sw('g-' + g[0], c.need.indexOf(g[0]) >= 0, g[1], g[2]); }).join('') + '</div>' +
+        '<h3 class="sub-h">수익성 지표</h3><div class="list inner">' + sw('card', !!c.card, PROFIT[1], PROFIT[2]) + '</div>' +
+        '<h3 class="sub-h">신호 점수 <small>지표 10가지 중 몇 개 이상 맞을 때 받을지</small></h3><div class="grades four" role="radiogroup" aria-label="신호 점수">' +
+        SCORES.map(function (n) { return '<button role="radio" aria-checked="' + (c.score === n) + '" class="' + (c.score === n ? 'on' : '') + '" data-act="score" data-v="' + n + '">' + n + '점 이상</button>'; }).join('') + '</div>';
+      var R = S.res && S.res.key === S.cm + JSON.stringify(c) ? S.res : null;
+      if (!R) setTimeout(loadResearch, 0);
+      body += '<h3 class="sub-h">' + MARKET[S.cm] + '을 이 조건으로 지난 2년 (알림마다 100만원씩)</h3>' +
+        (!LIVE ? '<p class="small" style="margin:0">앱 연결 후 지난 2년 성적이 여기에 나와요.</p>'
+          : !R || R.loading ? '<p class="small" style="margin:0">계산 중…</p>'
+          : R.err || !R.data || !R.data[S.cm] ? '<p class="small" style="margin:0">아직 연구 결과가 없어요.</p>'
+          : resultLine(S.cm, R.data[S.cm]) + halvesLine(R.data[S.cm]));
+    }
+    return '<section class="card"><h2 style="font-size:15px">매수 알림 조건</h2><div class="grades four presets" role="radiogroup" aria-label="추천 설정">' + chips + '</div>' + body +
+      '<p class="small" style="margin:0;line-height:1.5">과거 성적은 미래 수익을 보장하지 않아요. 홈 화면 목록과 푸시 알림 모두 이 조건대로 걸러져요.</p></section>';
+  }
   function pageSettings() {
     var p = prefs(), on = pushOn(), mk = p.markets;
     var help = S.pushHelp ? '<p class="warn">아이폰은 Safari에서 아래쪽 <b>공유 버튼</b> → <b>홈 화면에 추가</b>를 누른 뒤, 홈 화면의 타점노트 아이콘으로 열어야 알림을 켤 수 있어요.</p>' : '';
     var denied = pushOK && Notification.permission === 'denied' ? '<p class="warn">이 휴대폰에서 알림이 차단돼 있어요. 휴대폰 설정 → 알림에서 타점노트(또는 브라우저)를 허용해 주세요.</p>' : '';
-    var hints = { '높음': '6가지 안정성 항목을 모두 통과한 매수 알림만 받아요. 알림이 드물어요.',
-      '보통': '안정성 높음·보통 매수 알림을 받아요. 3개 이상 부족한 낮음은 빼요.',
-      '낮음': '신호 점수 기준을 넘으면 등급과 상관없이 모두 받아요. 낮음은 손실 위험이 더 커요.' };
     var c = code();
     return top('<h1 style="margin:0;font-size:20px">알림 설정</h1>', '', demoBar()) + '<main class="page">' + help + denied +
       '<section class="list">' + sw('push', on, '푸시 알림 받기', S.busy ? '켜는 중…' : (on ? '켜져 있어요' : '타점이 생기면 바로 알려 드려요'), S.busy) +
       sw('mk-kr', mk.indexOf('kr') >= 0, '국장', '평일 09:15 ~ 15:20') + sw('mk-us', mk.indexOf('us') >= 0, '미장', '평일 밤 (한국 시간)') +
-      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때') +
+      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '보유 중인 종목이 약해질 때 · 지난 2년 3일 뒤 실제로 내린 비율은 절반 정도였어요') +
       sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
-      '<section class="card"><h2 style="font-size:15px">받을 매수 알림</h2><div class="grades" role="radiogroup" aria-label="받을 안정성 등급">' +
-      [['높음', '높음만'], ['보통', '보통 이상'], ['낮음', '전부']].map(function (g) {
-        return '<button role="radio" aria-checked="' + (p.minGrade === g[0]) + '" class="' + (p.minGrade === g[0] ? 'on' : '') + '" data-act="grade" data-v="' + g[0] + '">' + g[1] + '</button>';
-      }).join('') + '</div><p class="small" style="margin:0;line-height:1.5">' + hints[p.minGrade] + '</p></section>' +
+      condSection(p) +
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
       '<details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">개인정보 안내</summary><p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--sub)">이름·전화번호·이메일은 받지 않아요. 푸시 알림을 켜면 이 휴대폰의 알림 주소와 알림 설정만 저장하고, 알림을 끄면 지워요. 입장 코드는 이 휴대폰에만 저장돼요. <a href="privacy.html" style="color:var(--blue);text-decoration:underline">개인정보처리방침 전체 보기</a></p></details>' +
@@ -395,8 +506,22 @@
     sell: function () { var p = prefs(); p.sell = !p.sell; savePrefs(p); },
     quiet: function () { var p = prefs(); p.quiet = !p.quiet; savePrefs(p); },
     grade: function (t) { var p = prefs(); p.minGrade = t.dataset.v; savePrefs(p); },
+    showall: function () { S.showAll = !S.showAll; render(); },
+    cm: function (t) { S.cm = t.dataset.v; render(); loadResearch(); },
+    preset: function (t) {
+      var p = prefs(), id = t.dataset.v;
+      if (id === '직접') { p.rules = baseRules(p); p.preset = '직접'; savePrefs(p); loadResearch(); return; }
+      var ps = findPreset(id); if (!ps) return;
+      p.preset = id; p.rules = clone(ps.rules); savePrefs(p); toast(ps.label + ' 설정을 적용했어요');
+    },
+    card: function () { editCustom(function (c) { c.card = !c.card; }); },
+    score: function (t) { editCustom(function (c) { c.score = +t.dataset.v; }); },
     logout: function () { if (pushOn()) disablePush(); store.del(K.code); store.del(K.feed); S.feed = null; S.open = false; location.hash = '#/'; render(); }
   };
+  function editCustom(fn) { var p = prefs(), c = customOf(p); fn(c); p.rules = baseRules(p); p.rules[S.cm] = c; p.preset = '직접'; savePrefs(p); loadResearch(); }
+  GUARDS.forEach(function (g) {
+    ACT['g-' + g[0]] = function () { editCustom(function (c) { var i = c.need.indexOf(g[0]); if (i >= 0) c.need.splice(i, 1); else c.need.push(g[0]); c.need.sort(function (x, y) { return GUARDS.map(function (z) { return z[0]; }).indexOf(x) - GUARDS.map(function (z) { return z[0]; }).indexOf(y); }); }); };
+  });
   ['kr', 'us', 'crypto'].forEach(function (m) {
     ACT['mk-' + m] = function () {
       var p = prefs(), i = p.markets.indexOf(m);
