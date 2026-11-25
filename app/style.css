@@ -437,3 +437,18 @@ summary.dsum small { font-size: 12px; color: var(--mut); font-weight: 500; margi
 
 .icon-btn { color: var(--ink2); }
 .seg.seg3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.hours i.ext { background: #E0A100; }
+
+/* 로그인 버튼 (카카오 · 네이버 · Google 안내 색) */
+.logins { display: grid; gap: 8px; }
+.logins button { min-height: 48px; border-radius: 12px; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; border: 0; }
+.logins button[disabled] { opacity: .5; }
+.lg-kakao { background: #FEE500; color: rgba(0,0,0,.85); }
+.lg-naver { background: #03C75A; color: #fff; }
+.lg-google { background: #fff; color: #1f1f1f; border: 1px solid #DADCE0 !important; }
+/* 의견 답글 */
+.fbreply { margin: 8px 0 0 12px; padding: 8px 10px; border-left: 3px solid var(--blue); background: var(--soft); border-radius: 0 10px 10px 0; }
+.fbreply p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.newtag { font-style: normal; font-size: 11px; font-weight: 700; color: #fff; background: var(--red); border-radius: 6px; padding: 1px 6px; margin-left: 4px; vertical-align: 1px; }
+.chk { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink2); flex-wrap: wrap; }
+.chk input { width: 20px; height: 20px; accent-color: var(--blue); }

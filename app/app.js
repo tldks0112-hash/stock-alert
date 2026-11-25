@@ -5,6 +5,13 @@
   var CFG = window.APP_CONFIG || {};
   var LIVE = !!(CFG.supabaseUrl && CFG.supabaseKey);
   var $app = document.getElementById('app');
+  // 유사투자자문업 신고가 수리되면 신고번호를 넣어요. 비어 있으면 무료 베타 문구가 나와요.
+  var LEGAL = { advisorNo: '' };
+  function whoAmI() { return LEGAL.advisorNo ? '타점노트는 유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ')이며 정식 금융투자업자가 아니에요' : '서비스 제공자는 금융투자업자가 아니에요'; }
+  function topNotice() {
+    return LEGAL.advisorNo ? '유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ')로 정식 금융투자업자가 아니에요. 개별 상담과 자금 운용은 하지 않으며, 원금 손실이 생길 수 있어요.'
+      : '투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.';
+  }
   var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
@@ -32,16 +39,17 @@
     ['투자 참고용 정보예요', '이 앱의 타점과 가격은 투자 판단을 돕는 참고 정보이며, 투자자문이나 매매 권유가 아니에요.'],
     ['개별 상담과 자금 운용은 하지 않아요', '종목별 1:1 상담, 계좌 대리 운용, 매매 대행은 제공하지 않아요.'],
     ['원금 손실이 생길 수 있어요', '알림대로 매매해도 손실이 날 수 있으며, 투자 판단과 그 결과의 책임은 본인에게 있어요.'],
-    ['과거 성적은 미래 수익을 보장하지 않아요', '성적표와 시뮬레이션은 지난 데이터로 계산한 결과예요. 서비스 제공자는 금융투자업자가 아니에요.']
+    ['과거 성적은 미래 수익을 보장하지 않아요', '성적표와 시뮬레이션은 지난 데이터로 계산한 결과예요. ' + whoAmI() + '.']
   ];
   var S = { feed: null, loading: false, error: '', tab: 'all', rec: 'sim', agree: [false, false, false, false],
     codeErr: '', busy: false, pushHelp: false, open: null, agreedNow: false, cm: 'kr' };   // agreedNow: 이번에 앱을 연 뒤 동의했는지 (앱을 열 때마다 안내·동의 화면)
   var OPEN_CODE = 'OPEN';   // 서버에 이 코드가 켜져 있으면 초대 코드 없이 바로 들어가요
 
   // ---------- 작은 도구 ----------
+  var onSet = null;                        // 로그인했을 때 기록이 바뀌면 계정에 저장 (아래 '로그인' 부분)
   var store = {
     get: function (k, d) { try { var v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
-    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} },
+    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} if (onSet) onSet(k); },
     del: function (k) { try { localStorage.removeItem(k); } catch (_) {} }
   };
   // ---------- 화면 테마 (자동 · 밝게 · 어둡게) ----------
@@ -366,9 +374,25 @@
     }
     return { open: false, text: '휴장' };
   }
+  // 미장 시간대별 거래: 데이마켓(한국 낮, 대체거래소) · 프리마켓 · 정규장 · 애프터마켓 (미국 동부시간 기준으로 계산 → 서머타임 자동 반영)
+  function usTradeDay(y, m, d) { var w = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); return w > 0 && w < 6 && !HOLI.us[ymd(y, m, d)]; }
+  function usSession(now) {
+    var tz = SESS.us.tz, p = tzParts(now, tz), key = ymd(p.y, p.m, p.d), today = usTradeDay(p.y, p.m, p.d);
+    var close = (EARLY.us || {})[key] || SESS.us.close, afterEnd = close < SESS.us.close ? 1020 : 1200;
+    var nd = new Date(Date.UTC(p.y, p.m - 1, p.d + 1)), next = usTradeDay(nd.getUTCFullYear(), nd.getUTCMonth() + 1, nd.getUTCDate());
+    var T = function (min, plusDay) { var dd = new Date(Date.UTC(p.y, p.m - 1, p.d + (plusDay ? 1 : 0))); return hm(at(tz, dd.getUTCFullYear(), dd.getUTCMonth() + 1, dd.getUTCDate(), min).toISOString()); };
+    if (today && p.min >= 240 && p.min < SESS.us.open) return { k: 'pre', name: '프리마켓', text: T(SESS.us.open) + ' 정규장' };
+    if (today && p.min >= SESS.us.open && p.min < close) return { k: 'reg', name: '정규장', text: T(close) + (close !== SESS.us.close ? ' 조기 마감' : ' 마감') };
+    if (today && p.min >= close && p.min < afterEnd) return { k: 'after', name: '애프터마켓', text: T(afterEnd) + '까지' };
+    if (today && p.min < 240) return { k: 'day', name: '데이마켓', text: T(240) + ' 프리마켓' };
+    if (next && p.min >= 1200) return { k: 'day', name: '데이마켓', text: T(240, true) + ' 프리마켓' };
+    return null;
+  }
   function hoursLine(p) {
     var now = new Date();
     return '<p class="hours" aria-label="장 시간 (한국 시간)">' + ['kr', 'us', 'crypto'].filter(function (mk) { return p.markets.indexOf(mk) >= 0; }).map(function (mk) {
+      var u = mk === 'us' ? usSession(now) : null;
+      if (u) return '<span><i class="' + (u.k === 'reg' ? 'on' : 'ext') + '"></i>' + MARKET[mk] + ' ' + u.name + ' · ' + u.text + '</span>';
       var h = marketHours(mk, now);
       return '<span><i class="' + (h.open ? 'on' : '') + '"></i>' + MARKET[mk] + ' ' + (h.open ? '장중 · ' : '') + h.text + '</span>';
     }).join('') + '</p>';
@@ -485,7 +509,7 @@
       });
     }
     c.font = '500 26px ' + SHARE_FONT; c.fillStyle = '#8B95A1';
-    var foot = wrapLines(c, '투자 참고용 정보이며 투자자문·매매 권유가 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.', W - 2 * P - 20);
+    var foot = wrapLines(c, (LEGAL.advisorNo ? '유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ') · 개별 상담·자금 운용 불가. ' : '') + '투자 참고용 정보이며 투자자문·매매 권유가 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.', W - 2 * P - 20);
     var fy = H - 96 - (foot.length - 1) * 38;
     c.fillStyle = '#6B7684'; c.font = '600 26px ' + SHARE_FONT; c.fillText(sp.when || '', P + 10, fy - 54);
     c.font = '500 26px ' + SHARE_FONT; c.fillStyle = '#8B95A1';
@@ -523,7 +547,7 @@
   function shareHold(h, an) {
     var m = h.market, list = axList(an), L = (an.legend || []).filter(function (x) { return x.pct != null; }).sort(function (a, b) { return b.pct - a.pct; })[0];
     var rows = [['종합 점수 (참고용)', an.score == null ? '정보 부족' : an.score + '점', '']];
-    if (L) rows.push(['가장 잘 맞는 관점', L.who + ' ' + L.pct + '%', '']);
+    if (L) rows.push(['가장 잘 맞는 원칙', legOf(L)[0] + ' ' + L.pct + '%', '']);
     var x = an.extra || {};
     if (x.r1y != null) rows.push(['1년 수익률', pct(x.r1y), tone(x.r1y)]);
     return shareSpec({ tag: MARKET[m] + ' · ' + h.code, title: h.name, big: money(m, an.price), sub: pct(an.chg), subTone: tone(an.chg), rows: rows,
@@ -569,7 +593,7 @@
     '<div class="two"><button class="btn ghost" data-act="jexport">내보내기</button><label class="btn ghost" style="cursor:pointer">가져오기<input type="file" accept="application/json,.json" data-imp hidden></label></div></section>';
   function journalSection() {
     var all = jr(), open = all.filter(function (e) { return !e.out; }), done = all.filter(function (e) { return e.out; }).sort(function (x, y) { return x.out.at < y.out.at ? 1 : -1; });
-    var head = '<p class="foot-note" style="margin:0 4px">타점에서 <b>샀어요</b>를 누르면 여기에 적혀요. 판 다음 <b>팔았어요</b>를 누르면 손익·승률을 자동으로 계산해요. 기록은 이 휴대폰에만 저장돼요.</p>';
+    var head = '<p class="foot-note" style="margin:0 4px">타점에서 <b>샀어요</b>를 누르면 여기에 적혀요. 판 다음 <b>팔았어요</b>를 누르면 손익·승률을 자동으로 계산해요. 기록은 이 휴대폰에만 저장돼요' + (session() ? ' (로그인해서 계정에도 저장 중)' : '') + '.</p>';
     if (!all.length) return head + '<p class="empty">아직 기록이 없어요.<br>타점을 눌러 <b>샀어요 · 매매일지에 적기</b>를 눌러 보세요.</p>' + JBACKUP;
     var rets = done.map(jret), wins = rets.filter(function (r) { return r > 0; }).length;
     var sum = { kr: 0, us: 0 }; done.forEach(function (e) { sum[e.market === 'us' ? 'us' : 'kr'] += e.amount * jret(e); });
@@ -745,26 +769,33 @@
       return '<div class="gauge"><span>' + g[0] + '</span><b>' + (g[1] == null ? '-' : g[1] + '%') + '</b>' + gbar(g[1], g[2] === 'calm' ? 'calm' : '') + '<em>' + gword(g[1], g[2]) + '</em></div>';
     }).join('') + '</div><p class="small gnote">지난 1년 중 오늘보다 약했던 날의 비율이에요. 80%면 1년 중 상위 20% 수준이에요.</p>';
   }
+  // 투자 원칙 점검표: 이름은 앱에서 정함 (예전 서버 데이터의 인물 이름은 쓰지 않음)
+  var LEG = { trend: ['상승 추세', '강한 상승 추세에 올라탄 종목만'], breakout: ['신고가 돌파', '새 고점을 거래량과 함께 뚫을 때'],
+    leader: ['실적 주도주', '실적이 빠르게 느는 주도주의 돌파'], quality: ['우량 기업', '돈 잘 벌고 빚 적은 회사를 적당한 값에'],
+    value: ['안전마진', '회사 가치보다 싸게 사서 안전하게'], garp: ['성장 대비 적정가', '성장에 비해 아직 싼 회사'] };
+  var LEG_OLD = { minervini: 'trend', livermore: 'breakout', oneil: 'leader', buffett: 'quality', graham: 'value', lynch: 'garp' };
+  function legOf(x) { return LEG[LEG_OLD[x.id] || x.id] || [x.m || '', x.idea || '']; }
+  function legItem(t) { return String(t || '').replace(/^[A-Z] · /, ''); }
   function legendTop(an) {
     var L = (an.legend || []).filter(function (x) { return x.pct != null; });
     if (!L.length) return '';
     L.sort(function (a, b) { return b.pct - a.pct; });
     var x = L[0];
-    return '<div class="line ltop"><span>가장 잘 맞는 관점</span><b>' + esc(x.who) + ' · ' + esc(x.m) + ' <span class="' + (x.pct >= 70 ? 'red' : '') + '">' + x.pct + '%</span></b></div>';
+    return '<div class="line ltop"><span>가장 잘 맞는 원칙</span><b>' + esc(legOf(x)[0]) + ' <span class="' + (x.pct >= 70 ? 'red' : '') + '">' + x.pct + '%</span></b></div>';
   }
   function legendBox(h, an) {
     var L = an.legend || [];
     if (!L.length) return '';
-    return '<h3 class="sub-h">투자 대가의 눈으로 보기 <small>원칙을 몇 % 충족하는지</small></h3><div class="legends">' + L.map(function (x) {
+    return '<h3 class="sub-h">투자 원칙으로 보기 <small>널리 알려진 원칙을 몇 % 충족하는지</small></h3><div class="legends">' + L.map(function (x) {
       var key = h.id + ':' + x.id, open = S.lgopen === key;
       var right = x.pct != null ? '<b class="' + (x.pct >= 70 ? 'red' : x.pct < 40 ? 'blue' : '') + '">' + x.pct + '%</b>' : '<small>-</small>';
-      var head = '<button class="lg" data-act="lgopen" data-v="' + esc(key) + '" aria-expanded="' + open + '"><span><b>' + esc(x.who) + '</b> <small>' + esc(x.m) + '</small><em>' + esc(x.na || x.idea) + '</em></span>' + right + '</button>' +
+      var head = '<button class="lg" data-act="lgopen" data-v="' + esc(key) + '" aria-expanded="' + open + '"><span><b>' + esc(legOf(x)[0]) + '</b><em>' + esc(x.na || legOf(x)[1]) + '</em></span>' + right + '</button>' +
         (x.pct != null ? gbar(x.pct) : '');
       var body = open && x.items ? '<ul class="lgitems">' + x.items.map(function (it) {
-        return '<li>' + (it.ok == null ? '<i class="na">?</i>' : it.ok ? ICON.ok : ICON.no) + '<span>' + esc(it.t) + '</span><small>' + (it.ok == null ? '정보 없음' : esc(it.v || '')) + '</small></li>';
+        return '<li>' + (it.ok == null ? '<i class="na">?</i>' : it.ok ? ICON.ok : ICON.no) + '<span>' + esc(legItem(it.t)) + '</span><small>' + (it.ok == null ? '정보 없음' : esc(it.v || '')) + '</small></li>';
       }).join('') + '</ul><p class="small" style="margin:4px 0 0">' + x.n + '개 확인 중 ' + x.pass + '개 충족' + (x.items.length > x.n ? ' · 정보가 없는 ' + (x.items.length - x.n) + '개는 빼고 계산했어요' : '') + '</p>' : '';
       return '<div class="lgrow">' + head + body + '</div>';
-    }).join('') + '</div><p class="small" style="margin:6px 0 0">책과 인터뷰로 알려진 원칙을 단순하게 옮긴 점검표예요. 그 투자자가 이 종목을 직접 평가하거나 추천한 것이 아니에요.</p>';
+    }).join('') + '</div><p class="small" style="margin:6px 0 0">널리 알려진 투자 원칙을 단순하게 옮긴 점검표예요. 특정 인물이나 단체와 관계가 없고, 이 종목을 추천하는 것이 아니에요.</p>';
   }
   var AXES = { power: '상승 힘', calm: '안정감', value: '가격 매력', growth: '성장성', health: '재무 건강', mkt: '시장 분위기' };
   var AX_SAY = { power: ['오르는 힘이 강해요', '오르는 힘이 약해요'], calm: ['가격이 덜 흔들려요', '가격이 많이 흔들려요'],
@@ -838,7 +869,7 @@
     var list = axList(an), say = sayOf(list), score = an.score;
     var glance = (an.axes ? '<div class="glance">' + radar(list, score) + '<div class="gtext"><span class="small">종합 점수 <small>' + list.length + '가지 평균 · 참고용</small></span>' +
       '<b class="' + (score == null ? '' : score >= 70 ? 'red' : score < 40 ? 'blue' : '') + '">' + (score == null ? '정보 부족' : score + '점 · ' + (score >= 70 ? '높은 편' : score >= 40 ? '중간' : '낮은 편')) + '</b>' +
-      (say ? '<p>' + esc(say) + '</p>' : '') + legendTop(an) + '</div></div><p class="small gnote" style="margin:6px 2px 0">점수와 관점은 지난 데이터로 계산한 참고 지표예요. 사거나 팔라는 뜻이 아니에요.</p>' : '');
+      (say ? '<p>' + esc(say) + '</p>' : '') + legendTop(an) + '</div></div><p class="small gnote" style="margin:6px 2px 0">점수와 원칙 점검은 지난 데이터로 계산한 참고 지표예요. 사거나 팔라는 뜻이 아니에요.</p>' : '');
     var ni = nws && nws.items;
     var body = sparkBig(an.spark) + mine + glance + probLine(probFor(prob, h, an)) + (ni && ni.length && !open ? newsList(ni, 1) : '');
     var more = '';
@@ -867,8 +898,8 @@
           return '<div class="line"><span>다음 실적 발표</span><b>' + (E.earn && d >= -3 ? mmdd(E.earn) + (d >= 0 ? ' (D-' + d + ')' : ' (발표됨)') : '정보 없음') + '</b></div>' +
             '<div class="line"><span>배당수익률 <small class="small">1년 배당 ÷ 현재가</small></span><b>' + (E.dy != null ? '연 ' + E.dy.toFixed(2) + '%' : '없음') + '</b></div>' +
             (E.exdiv && xd >= 0 ? '<div class="line"><span>다음 배당락일</span><b>' + mmdd(E.exdiv) + ' (D-' + xd + ')</b></div>' : ''); })(an.events) : '') + '</div>' +
-        (ni && ni.length ? '<h3 class="sub-h">뉴스 <small>구글 뉴스 · 누르면 기사로 가요</small></h3>' + newsList(ni, 6) : '') +
-        '<p class="small" style="margin:8px 0 0">' + hm(an.updated || an.asof) + ' 기준 · 국장 시세는 15~20분 늦을 수 있어요.</p>' +
+        (ni && ni.length ? '<h3 class="sub-h">뉴스 <small>' + newsSrc(ni) + ' 결과 · 누르면 기사로 가요</small></h3>' + newsList(ni, 6) : '') +
+        '<p class="small" style="margin:8px 0 0">' + hm(an.updated || an.asof) + ' 기준 · ' + (m === 'us' ? '미장은 정규장 가격이에요. 프리·애프터·데이마켓 가격은 증권사 앱에서 확인해 주세요.' : '국장 시세는 15~20분 늦을 수 있어요.') + '</p>' +
         '<button class="btn ghost" style="margin-top:10px" data-act="hshare" data-v="' + esc(h.id) + '">이 카드 이미지로 공유하기</button>';
     }
     return '<section class="card hcard">' + head + body + paRows(h, an) + more + hButtons(h, B, open) + '</section>';
@@ -876,7 +907,7 @@
   function hButtons(h, B, open) {
     if (S.hedit === h.id) return hForm(h);
     return '<div class="hbtns"><button class="btn" data-act="hopenapp" data-v="' + esc(h.id) + '">' + esc(B.name) + '에서 보기</button>' +
-      '<button class="btn ghost" data-act="hmore" data-v="' + esc(h.id) + '">' + (open ? '접기' : '자세히') + '</button>' +
+      '<button class="btn ghost" data-act="hmore" data-v="' + esc(h.id) + '">' + (open ? '분석 접기' : '종목 분석') + '</button>' +
       '<button class="btn ghost" data-act="hedit" data-v="' + esc(h.id) + '">수정</button></div>';
   }
   function hForm(h) {
@@ -912,7 +943,7 @@
         '<p class="small" style="margin:8px 0 0">고른 지표가 지금과 같았던 날을 과거에서 찾아, 며칠 뒤 실제로 오른 비율을 보여 줘요. 많이 고를수록 비슷한 날이 줄어요.</p>' + chips + '</details></section>';
     return top('<span style="font-size:18px;font-weight:700">내 보유</span>', '<a class="btn small-btn" href="#/hold/add">+ 종목 추가</a>') + demoBar() +
       '<main class="page">' + body +
-      '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. 수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.</p></main>' + menu('hold');
+      '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
   }
   function pageHoldAdd() {
     var s = S.hsel;
@@ -990,6 +1021,7 @@
     if (m < 60 * 48) return '어제';
     return kst(new Date(iso), { month: 'numeric', day: 'numeric' });
   }
+  function newsSrc(items) { return items && items[0] && items[0].p === 'naver' ? '네이버 뉴스 검색' : '구글 뉴스'; }
   function newsList(items, n) {
     var xs = (items || []).filter(function (x) { return x && /^https:\/\//.test(x.u || '') && x.t; }).slice(0, n || 6);
     if (!xs.length) return '';
@@ -1073,20 +1105,69 @@
   }
 
   // ---------- 의견 보내기 (#/feedback) ----------
+  // 보낸 의견마다 이 휴대폰이 만든 무작위 번호를 같이 보내고(서버엔 지문만), 그 번호로 내 의견의 답글만 받아 와요.
+  K.fbmine = 'tn_fb_mine'; K.fbseen = 'tn_fb_seen';
+  function fbMine() { var x = store.get(K.fbmine, []); return Array.isArray(x) ? x : []; }
+  function fbLastReply() { var t = ''; ((S.fbm && S.fbm.list) || []).forEach(function (f) { (f.replies || []).forEach(function (r) { if (r.at > t) t = r.at; }); }); return t; }
+  function fbUnread() {
+    var seen = store.get(K.fbseen, ''), n = 0;
+    ((S.fbm && S.fbm.list) || []).forEach(function (f) { (f.replies || []).forEach(function (r) { if (r.at > seen) n++; }); });
+    return n;
+  }
+  function loadFbMine(force, markSeen) {
+    var mine = fbMine();
+    if (!LIVE || !mine.length || (S.fbm && (S.fbm.loading || (!force && Date.now() - S.fbm.at < 60000)))) { if (markSeen && S.fbm && S.fbm.list) fbMarkSeen(); return; }
+    S.fbm = { loading: true, at: Date.now(), list: S.fbm && S.fbm.list };
+    rpc('app_feedback_mine', { p_code: code(), p_items: mine.map(function (x) { return { id: x.id, tok: x.tok }; }) })
+      .then(function (l) { S.fbm = { at: Date.now(), list: Array.isArray(l) ? l : [] }; if (markSeen) fbMarkSeen(); render(); })
+      .catch(function () { S.fbm = { at: Date.now(), list: (S.fbm && S.fbm.list) || [] }; });
+  }
+  function fbMarkSeen() { var t = fbLastReply(); if (t && t > store.get(K.fbseen, '')) { S.fbNewUntil = store.get(K.fbseen, ''); store.set(K.fbseen, t); setTimeout(render, 0); } }
+  function maskMail(e) { var p = String(e || '').split('@'); return p.length === 2 ? p[0].slice(0, 2) + '***@' + p[1] : ''; }
+  function fbMailOpt() {
+    var x = session();
+    if (!x) return '<p class="small" style="margin:0 0 8px">설정에서 로그인하면 답글을 메일로도 받을 수 있어요.</p>';
+    if (!x.user.email) return '<p class="small" style="margin:0 0 8px">이 계정은 메일 주소가 없어서 답글은 앱에서만 볼 수 있어요.</p>';
+    var on = S.fbMail !== false;
+    return '<label class="chk" style="margin:0 0 8px"><input type="checkbox" name="mail"' + (on ? ' checked' : '') + '> 답글이 달리면 메일로도 받기 <small class="small">' + esc(maskMail(x.user.email)) + '</small></label>';
+  }
+  function rpcAs(fn, args) {             // 로그인했으면 계정으로, 아니면 그냥
+    if (!session()) return rpc(fn, args);
+    return freshToken().then(function (tok) {
+      if (!tok) return rpc(fn, args);
+      return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/' + fn, { method: 'POST', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify(args) })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    });
+  }
+  function fbMineCard() {
+    var L = (S.fbm && S.fbm.list) || [];
+    if (!fbMine().length) return '';
+    if (!L.length) return '<section class="card"><h2 style="font-size:15px">내가 보낸 의견</h2><p class="small" style="margin:0">' + (S.fbm && S.fbm.loading ? '불러오는 중…' : '아직 답글이 없어요. 답글이 달리면 설정 탭에 빨간 점이 생겨요.') + '</p></section>';
+    return '<section class="card"><h2 style="font-size:15px">내가 보낸 의견 <small class="small">답글은 이 휴대폰에서만 보여요</small></h2>' + L.map(function (f) {
+      return '<div class="fbrow"><div class="line"><span class="tag">' + esc(f.kind) + '</span><span class="small">' + esc(dayLabel(f.at)) + ' ' + hm(f.at) + '</span></div><p>' + esc(f.body) + '</p>' +
+        (f.replies || []).map(function (r) {
+          var isNew = S.fbNewUntil != null && r.at > S.fbNewUntil;
+          return '<div class="fbreply"><div class="line"><b>' + esc(r.by || '0521sa') + (isNew ? ' <i class="newtag">새 답글</i>' : '') + '</b><span class="small">' + esc(dayLabel(r.at)) + ' ' + hm(r.at) + '</span></div><p>' + esc(r.body) + '</p></div>';
+        }).join('') + '</div>';
+    }).join('') + '</section>';
+  }
   var FB_KINDS = ['좋아요', '불편해요', '오류', '제안', '기타'];
   function pageFeedback() {
     var k = S.fbKind || '제안', sent = S.fbSent;
-    var body = sent ? '<section class="card"><h2 style="font-size:16px">보내 주셔서 고마워요</h2><p class="small" style="margin:0;line-height:1.6">보내 주신 의견은 하나하나 읽고 다음 업데이트에 반영할게요. 바뀐 내용은 설정 → 공지사항에서 알려 드려요.</p>' +
+    var body = sent ? '<section class="card"><h2 style="font-size:16px">보내 주셔서 고마워요</h2><p class="small" style="margin:0;line-height:1.6">보내 주신 의견은 하나하나 읽고 다음 업데이트에 반영할게요. 개발자 답글이 달리면 설정 탭에 빨간 점이 생겨요' + (S.fbMail !== false && session() && session().user.email ? ' (메일로도 보내 드려요)' : '') + '.</p>' +
         '<button class="btn ghost" data-act="fbagain" style="margin-top:12px">하나 더 보내기</button></section>'
       : '<section class="card"><h2 style="font-size:16px">어떤 의견인가요?</h2><div class="picks" role="radiogroup" aria-label="의견 종류">' + FB_KINDS.map(function (x) {
           return '<button role="radio" aria-checked="' + (x === k) + '" class="' + (x === k ? 'on' : '') + '" data-act="fbkind" data-v="' + x + '">' + x + '</button>';
         }).join('') + '</div>' +
         '<form data-form="feedback" class="jform" style="margin-top:12px"><label>내용 <small class="small">2~1000자</small><textarea name="body" rows="6" maxlength="1000" placeholder="' +
         (k === '오류' ? '어느 화면에서 무엇을 눌렀을 때 어떻게 됐는지 적어 주세요.' : k === '불편해요' ? '어떤 점이 불편했는지 편하게 적어 주세요.' : '자유롭게 적어 주세요.') + '">' + esc(S.fbDraft || '') + '</textarea></label>' +
+        fbMailOpt() +
         '<button class="btn" type="submit"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? '보내는 중…' : '보내기') + '</button></form>' +
-        '<p class="small" style="margin:10px 0 0;line-height:1.6">이름이나 연락처는 받지 않아요. 답장이 필요하면 내용에 연락 방법을 적어 주세요. 보낸 의견은 서비스 개선에만 쓰고 1년 뒤 지워요.</p></section>';
+        '<p class="small" style="margin:10px 0 0;line-height:1.6">' + (session() ? '로그인한 상태라 의견이 계정과 연결돼요. ' : '이름이나 연락처는 받지 않아요. ') +
+        '개발자 답글은 이 화면 아래 \'내가 보낸 의견\'에서 볼 수 있어요. 보낸 의견은 서비스 개선에만 쓰고 1년 뒤 지워요.</p></section>';
+    setTimeout(function () { loadFbMine(false, true); }, 0);
     return top('<span style="display:flex;align-items:center;gap:2px"><a class="icon-btn" href="#/settings" aria-label="뒤로">' + ICON.back + '</a><span style="font-size:16px;font-weight:700">의견 보내기</span></span>') +
-      '<main class="page">' + body + '</main>' + menu('settings');
+      '<main class="page">' + body + fbMineCard() + '</main>' + menu('settings');
   }
 
   // ---------- 개발자 통계 (숨은 화면 #/dev) ----------
@@ -1117,9 +1198,16 @@
     var F = S.devfb && S.devfb.data;
     if (!F) return '';
     var rec = (F.recent || []).map(function (f) {
-      return '<div class="fbrow"><div class="line"><span class="tag">' + esc(f.kind) + '</span><span class="small">' + esc(dayLabel(f.created_at)) + ' ' + hm(f.created_at) + '</span></div><p>' + esc(f.body) + '</p></div>';
+      var reps = (f.replies || []).map(function (r) { return '<div class="fbreply"><div class="line"><b>' + esc(r.by || '0521sa') + '</b><span class="small">' + (f.mail ? (r.mailed ? '메일 보냄 · ' : r.mail_err ? '메일 실패 · ' : '메일 보내는 중 · ') : '') + esc(dayLabel(r.at)) + ' ' + hm(r.at) + '</span></div><p>' + esc(r.body) + '</p></div>'; }).join('');
+      var form = f.can_reply && f.id != null ? (S.devReply === f.id
+        ? '<form data-form="devreply" class="jform" data-id="' + esc(f.id) + '" style="margin-top:8px"><textarea name="body" rows="3" maxlength="1000" placeholder="0521sa 이름으로 답글이 달려요"></textarea>' +
+          '<div class="two"><button type="button" class="btn ghost" data-act="devreplyoff">취소</button><button class="btn" type="submit"' + (S.busy ? ' disabled' : '') + '>답글 달기</button></div></form>'
+        : '<button class="btn ghost small-btn" style="margin-top:6px" data-act="devreplyon" data-v="' + esc(f.id) + '">답글 쓰기</button>')
+        : '<p class="small" style="margin:6px 0 0">예전 방식으로 받은 의견이라 답글을 볼 수 없어요</p>';
+      return '<div class="fbrow"><div class="line"><span class="tag">' + esc(f.kind) + (f.mail ? ' · 메일 답글' : '') + '</span><span class="small">' + esc(dayLabel(f.created_at)) + ' ' + hm(f.created_at) + '</span></div><p>' + esc(f.body) + '</p>' + reps + form + '</div>';
     }).join('') || '<p class="small" style="margin:0">아직 받은 의견이 없어요</p>';
-    return '<section class="card"><h2 style="font-size:15px">받은 의견 <small class="small">전체 ' + (F.total || 0) + '개</small></h2>' + rec + '</section>';
+    return '<section class="card"><h2 style="font-size:15px">받은 의견 <small class="small">전체 ' + (F.total || 0) + '개</small></h2>' +
+      '<p class="small" style="margin:0 0 6px">답글은 보낸 사람 휴대폰에만 보여요. 종목이나 매매에 대한 개별 조언은 답하지 마세요 (1:1 투자 상담은 유사투자자문업으로도 할 수 없어요).</p>' + rec + '</section>';
   }
   function loadDev(force) {
     var k = devKey();
@@ -1197,7 +1285,8 @@
       body = '<section class="card"><div class="devnums">' +
           '<div><span>푸시 구독</span><b>' + (U.total || 0) + '</b><em>7일 +' + (U.new7 || 0) + '</em></div>' +
           '<div><span>보유·관심 종목</span><b>' + (H.tickers || 0) + '</b><em>7일 새 +' + (H.new7 || 0) + '</em></div>' +
-          '<div><span>엔진</span><b>' + (D.beat ? since(D.beat) : '-') + '</b><em>마지막 실행</em></div></div></section>' +
+          '<div><span>엔진</span><b>' + (D.beat ? since(D.beat) : '-') + '</b><em>마지막 실행</em></div>' +
+          '<div><span>로그인 계정</span><b>' + ((D.data && D.data.accounts) || 0) + '</b><em>7일 저장 ' + ((D.data && D.data.accounts7) || 0) + '</em></div></div></section>' +
         devEngine(D) + devFeedback() +
         '<section class="card"><h2 style="font-size:15px">많이 넣은 종목 <small class="small">최근 30일 · 숫자는 요청 횟수</small></h2>' + topRows + '</section>' +
         '<section class="card"><h2 style="font-size:15px">새로 들어온 종목</h2><div class="ilist">' + (recent || '<p class="small" style="margin:0">아직 없어요</p>') + '</div></section>' +
@@ -1219,7 +1308,7 @@
   // ---------- 화면 조각 ----------
   function menu(on) {
     function a(id, href, icon, label) { return '<a href="' + href + '" class="' + (on === id ? 'on' : '') + '"' + (on === id ? ' aria-current="page"' : '') + '>' + icon + label + '</a>'; }
-    return '<nav class="menu" aria-label="메뉴"><div class="futwrap">' + futInner() + '</div><div class="tabs">' + a('home', '#/', ICON.list, '타점') + a('hold', '#/hold', ICON.wallet, '보유') + a('ind', '#/ind', ICON.sliders, '지표 설정') + a('record', '#/record', ICON.chart, '성적표') + a('settings', '#/settings', ICON.gear, '설정' + (unread() ? '<i class="dot" aria-label="새 공지"></i>' : '')) + '</div></nav>';
+    return '<nav class="menu" aria-label="메뉴"><div class="futwrap">' + futInner() + '</div><div class="tabs">' + a('home', '#/', ICON.list, '타점') + a('hold', '#/hold', ICON.wallet, '보유') + a('ind', '#/ind', ICON.sliders, '지표 설정') + a('record', '#/record', ICON.chart, '성적표') + a('settings', '#/settings', ICON.gear, '설정' + (unread() || fbUnread() ? '<i class="dot" aria-label="새 소식"></i>' : '')) + '</div></nav>';
   }
   function top(title, right, extra) {
     return '<header class="top"><div class="bar">' + title + (right || '') + '</div>' + (extra || '') + '</header>';
@@ -1311,7 +1400,7 @@
     if (f && !S.error) body += '<a class="link-row" href="#/ind">받을 알림 조건 바꾸기 · 지표 설정 →</a><a class="link-row" href="#/guide">처음이라면 · 타점노트 사용법 보기 →</a>';
     return top('<span class="brand">타점노트<span class="tag">무료 베타</span></span>',
       '<span style="display:flex"><button class="icon-btn" data-act="refresh" aria-label="새로고침">' + ICON.refresh + '</button><a class="icon-btn" href="#/settings" aria-label="알림 설정">' + ICON.bell + '</a></span>',
-      '<p class="notice">투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>' + hoursLine(pf)) +
+      '<p class="notice">' + topNotice() + '</p>' + demoBar() + (S.offline ? '<p class="warn" style="margin:0 0 10px">인터넷에 연결되지 않았어요. 마지막으로 받은 내용을 보여 드려요.</p>' : '') + '<div class="tabs" role="group" aria-label="시장">' + tabs + '</div>' + hoursLine(pf)) +
       '<main class="page">' + annBar() + (f && S.tab === 'all' && !S.error ? recapCard(f.recap) + briefCard(f.brief) + moversCard(f.movers) : '') + '<div class="row-head"><h1>최근 타점 <span>' + items.length + '건</span></h1><span class="small">' + esc(status) + '</span></div>' + noBuyNote(f, pf, mine) + body +
       '<p class="foot-note">안전 점검은 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지예요. 최근 3일 알림만 보여요.</p></main>' + menu('home');
   }
@@ -1360,7 +1449,7 @@
     if (a.yt) {
       loadNews(a.yt);
       var an_ = (S.anews || {})[a.yt], nl = an_ && an_.items ? newsList(an_.items, 6) : '';
-      if (nl) out.push('<section class="card"><h2 style="font-size:15px">관련 뉴스</h2><p class="small" style="margin:0 0 4px">구글 뉴스에서 찾은 최근 3일 기사 제목이에요. 누르면 기사로 가요.</p>' + nl + '</section>');
+      if (nl) out.push('<section class="card"><h2 style="font-size:15px">관련 뉴스</h2><p class="small" style="margin:0 0 4px">' + newsSrc(an_.items) + '에서 찾은 최근 기사 제목이에요. 누르면 기사로 가요.</p>' + nl + '</section>');
     }
     out.push(journalBox(a));
     var Ba = BROKERS[m === 'crypto' ? broker().coin : broker().stock];
@@ -1497,6 +1586,7 @@
       (p.sell ? sw('sellAll', p.sellAll, '모든 종목 매도 알림', '다른 종목도 갖고 있다면 켜 주세요 · 알림이 많아져요') : '') +
       sw('brief', p.brief, '아침 브리핑', '매일 아침 8시쯤 밤사이 시장 요약 (일요일 쉼)') +
       (mk.indexOf('kr') >= 0 ? sw('recap', p.recap, '점심 · 마감 요약', '국장 여는 날 12:30쯤, 15:40쯤 한 줄 요약') : '') + sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
+      accountCard() +
       '<section class="card"><h2 style="font-size:15px">화면 테마</h2><div class="seg seg3" style="margin:10px 0 0">' + [['auto', '자동'], ['light', '밝게'], ['dark', '어둡게']].map(function (q) {
         var on = store.get(K.theme, 'auto') === q[0];
         return '<button class="' + (on ? 'on' : '') + '" data-act="theme" data-v="' + q[0] + '" aria-pressed="' + on + '">' + q[1] + '</button>';
@@ -1505,13 +1595,13 @@
         '<h3 class="pick-h">주식 (국장 · 미장)</h3><div class="picks">' + STOCK_APPS.map(function (k) { return bchip(k, 'stock'); }).join('') + '</div>' +
         '<h3 class="pick-h">코인</h3><div class="picks">' + COIN_APPS.map(function (k) { return bchip(k, 'coin'); }).join('') + '</div></section>' +
       '<a class="list item-link" href="#/notice"><span><b>공지사항' + (unread() ? ' <span class="tag new">새 글 ' + unread() + '</span>' : '') + '</b><small>' + (S.ann && S.ann[0] ? esc(S.ann[0].date + ' · ' + S.ann[0].title) : '업데이트 소식') + '</small></span><span aria-hidden="true">›</span></a>' +
-      '<a class="list item-link" href="#/feedback"><span><b>의견 보내기</b><small>불편한 점, 오류, 바라는 기능을 알려 주세요</small></span><span aria-hidden="true">›</span></a>' +
+      '<a class="list item-link" href="#/feedback"><span><b>의견 보내기' + (fbUnread() ? ' <i class="newtag">새 답글 ' + fbUnread() + '</i>' : '') + '</b><small>불편한 점, 오류, 바라는 기능을 알려 주세요 · 답글도 여기서 봐요</small></span><span aria-hidden="true">›</span></a>' +
       '<a class="list item-link" href="#/guide"><span><b>타점노트 사용법</b><small>알림 읽는 법 · 사고파는 순서 · 장 시간</small></span><span aria-hidden="true">›</span></a>' +
       '<section class="card"><div class="line"><h2 style="font-size:15px">구독</h2><span class="tag">준비 중</span></div><p class="small" style="margin:0;line-height:1.6;color:var(--sub)">지금은 무료 베타예요. 정식 구독은 관련 신고를 마친 뒤에 시작하고, 시작 전에 미리 알려 드려요.</p></section>' +
       '<section class="card"><details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">투자 위험 고지</summary><ul style="margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:var(--sub)">' + NOTICES.map(function (n) { return '<li><b>' + n[0] + '</b> ' + n[1] + '</li>'; }).join('') + '</ul></details>' +
-      '<details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">개인정보 안내</summary><p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--sub)">이름·전화번호·이메일은 받지 않아요. 푸시 알림을 켜면 이 휴대폰의 알림 주소와 알림 설정만 저장하고, 알림을 끄면 지워요. 입장 코드는 이 휴대폰에만 저장돼요. <a href="privacy.html" style="color:var(--blue);text-decoration:underline">개인정보처리방침 전체 보기</a></p></details>' +
+      '<details><summary style="font-size:14px;font-weight:600;cursor:pointer;min-height:28px">개인정보 안내</summary><p style="margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--sub)">로그인하지 않으면 이름·전화번호·이메일은 받지 않아요. 푸시 알림을 켜면 이 휴대폰의 알림 주소와 알림 설정만 저장하고, 알림을 끄면 지워요. 입장 코드는 이 휴대폰에만 저장돼요. <a href="privacy.html" style="color:var(--blue);text-decoration:underline">개인정보처리방침 전체 보기</a></p></details>' +
       (LIVE && c && c !== OPEN_CODE ? '<div class="line"><span>초대 코드 ' + esc(c.slice(0, 4)) + '-••••</span><button class="btn ghost" style="width:auto;min-height:40px;padding:0 14px;font-size:13px" data-act="logout">코드 지우기</button></div>' : '') + '</section>' +
-      '<p class="foot-note">투자 참고용 정보이며 투자자문이 아니에요. 서비스 제공자는 금융투자업자가 아니며, 개별 상담과 자금 운용은 하지 않아요.</p></main>' + menu('settings');
+      '<p class="foot-note">투자 참고용 정보이며 투자자문이 아니에요. ' + whoAmI() + '. 개별 상담과 자금 운용은 하지 않아요.</p></main>' + menu('settings');
   }
 
   function pageGuide() {
@@ -1521,11 +1611,14 @@
       sec('타점노트는 이런 앱이에요', '<p>국장·미장·코인에서 정해진 규칙(지표 10가지 + 안전 점검)에 맞는 자리가 생기면 알려 줘요. 사람이 고르는 추천이 아니라 규칙대로 계산한 <b>참고 정보</b>예요.</p>') +
       sec('🔴 매수 알림 읽는 법', li(['<b>매수 기준가</b>: 이 가격 근처나 아래에서 사요. 지금 가격이 많이 위면 기다려요.', '<b>손절가</b>: 여기에 닿으면 팔아서 손실을 작게 끊어요. 가장 중요해요.', '<b>1차 매도</b>: 여기서 절반을 팔고, 남은 절반은 손절가를 산 가격으로 올려요.', '<b>나머지</b>: 오른 뒤 고점에서 정해진 만큼 빠지면 팔아요.', '<b>안전 점검</b>: 시장 흐름·추세·눌림·변동성·실적·과거 성적 6가지 중 몇 개를 통과했는지예요. 지표 설정의 <b>안정성 %</b>와는 다른 거예요.', '<b>신호 강도</b>: 지표 10가지 중 몇 %가 맞았는지예요. 60%면 10가지 중 6가지가 맞은 거예요.'])) +
       sec('🔵 매도 알림', '<p>이미 갖고 있는 종목이 약해질 때 와요. 기본으로는 <b>최근 7일 안에 매수 알림이 나간 종목</b>과 실전 기록·내 매매일지에 보유 중인 종목만 보여 줘요. 다른 종목도 갖고 있다면 설정에서 <b>모든 종목 매도 알림</b>을 켜세요. 과거 기록에서 3일 뒤 실제로 내린 건 절반 정도라 참고만 하세요.</p>') +
-      sec('내 보유 탭', '<ul><li><b>+ 종목 추가</b>로 가진 종목을 넣어요. 국장·미장·코인 아무 종목이나 돼요. 수량과 평균 단가는 이 휴대폰에만 저장돼요.</li><li><b>확률 계산에 쓸 지표</b>를 고르면, 그 지표들이 지금과 같았던 지난 5년의 날들에서 1·5·20거래일 뒤 실제로 오른 비율을 보여 줘요.</li><li><b>표본 적음</b>이 붙으면 비슷한 날이 적어서 숫자가 흔들리기 쉬워요. 지표를 줄여 보세요.</li><li>상승 확률은 대부분 50% 근처예요. 평소 상승 비율과 비교해서 보세요. 미래를 보장하지 않아요.</li><li><b>…에서 보기</b>를 누르면 <b>설정 → 증권사 · 거래소 앱</b>에서 고른 앱이 열리고 종목 코드가 복사돼요. 주식 10곳, 코인 4곳 중에 고를 수 있어요.</li><li>카드 아래에 그 종목의 최근 뉴스 제목이 나와요. 1시간 안에 나온 기사에는 <b>속보</b>가 붙어요.</li><li><b>지금 상태</b>의 %는 지난 1년 중 오늘보다 약했던 날의 비율이에요. 80%면 1년 중 상위 20% 수준이에요.</li><li><b>자세히</b>를 누르면 <b>투자 대가의 눈으로 보기</b>가 나와요. 버핏·그레이엄·린치·오닐·미너비니·리버모어의 공개된 원칙을 몇 % 충족하는지 보여 줘요. 그 사람이 직접 평가한 게 아니에요.</li><li>가진 종목이 아니어도 수량 없이 넣으면 <b>관심</b> 묶음에 들어가요.</li><li>카드의 오각형은 상승 힘·안정감·가격 매력·성장성·재무 건강 5가지를 0~100으로 그린 거예요. 가운데 숫자는 평균(종합 점수)이고 참고용이에요.</li></ul>') +
+      sec('내 보유 탭', '<ul><li><b>+ 종목 추가</b>로 가진 종목을 넣어요. 국장·미장·코인 아무 종목이나 돼요. 수량과 평균 단가는 이 휴대폰에만 저장돼요 (설정에서 로그인하면 계정에도 저장).</li><li><b>확률 계산에 쓸 지표</b>를 고르면, 그 지표들이 지금과 같았던 지난 5년의 날들에서 1·5·20거래일 뒤 실제로 오른 비율을 보여 줘요.</li><li><b>표본 적음</b>이 붙으면 비슷한 날이 적어서 숫자가 흔들리기 쉬워요. 지표를 줄여 보세요.</li><li>상승 확률은 대부분 50% 근처예요. 평소 상승 비율과 비교해서 보세요. 미래를 보장하지 않아요.</li><li><b>…에서 보기</b>를 누르면 <b>설정 → 증권사 · 거래소 앱</b>에서 고른 앱이 열리고 종목 코드가 복사돼요. 주식 10곳, 코인 4곳 중에 고를 수 있어요.</li><li>카드 아래에 그 종목의 최근 뉴스 제목이 나와요. 1시간 안에 나온 기사에는 <b>속보</b>가 붙어요.</li><li><b>지금 상태</b>의 %는 지난 1년 중 오늘보다 약했던 날의 비율이에요. 80%면 1년 중 상위 20% 수준이에요.</li><li><b>종목 분석</b>을 누르면 <b>투자 원칙으로 보기</b>가 나와요. 상승 추세·신고가 돌파·실적 주도주·우량 기업·안전마진·성장 대비 적정가, 널리 알려진 6가지 원칙을 몇 % 충족하는지 보여 줘요. 특정 인물이나 단체와 관계없는 점검표예요.</li><li>가진 종목이 아니어도 수량 없이 넣으면 <b>관심</b> 묶음에 들어가요.</li><li>카드의 오각형은 상승 힘·안정감·가격 매력·성장성·재무 건강 5가지를 0~100으로 그린 거예요. 가운데 숫자는 평균(종합 점수)이고 참고용이에요.</li></ul>') +
       sec('메뉴 위 선물 막대', '<ul><li>S&P500 · 나스닥100 · 다우 <b>지수 선물</b>의 등락을 보여 줘요. 밤(오후 6시 ~ 아침 6시)에는 <b>야간 선물</b>로 표시돼요.</li><li>누르면 가격, 오늘 흐름 그래프, 기준 시각이 펼쳐져요. 5분마다 새로 받고, 거래소 기준 약 10분 늦은 값이에요.</li></ul>') +
       sec('알림이 오면 이 순서로', '<ol><li>앱에서 매수 기준가·손절가를 확인해요.</li><li>증권사 앱에서 <b>현재가</b>를 꼭 다시 봐요. 국장 시세는 늦을 수 있어요.</li><li>지정가로 주문해요. 한 종목에 돈을 너무 많이 넣지 않아요.</li><li>손절가에 알림이나 주문을 걸어 둬요.</li><li>타점 화면에서 <b>샀어요</b>를 눌러 매매일지에 적어요.</li></ol>') +
       sec('지표 설정 · 수익성 · 안정성', li(['<b>지표 설정</b> 탭에서 받을 매수 알림 조건을 골라요. 처음이면 <b>추천</b>이 무난해요.', '<b>수익성</b>: 알림대로 100만원씩 샀을 때 한 번 살 때 평균 수익률(수수료 포함)이에요.', '<b>안정성</b>: 알림이 있었던 달 중 수익 난 달의 비율이에요.', '모두 과거 데이터로 계산한 값이라 앞으로도 그렇다는 보장은 없어요.'])) +
-      sec('장 시간 (한국 시간)', li(['국장: 평일 09:00 ~ 15:30', '미장: 평일 23:30 ~ 다음 날 06:00 (미국 서머타임에는 22:30 ~ 05:00)', '코인: 24시간', '휴장일과 미장 조기 마감은 첫 화면 장 시간에 반영돼요. 국장 2027년 휴장일은 거래소 공식 발표 전이라 공휴일 기준이에요.'])) +
+      sec('장 시간 (한국 시간)', li(['국장: 평일 09:00 ~ 15:30', '미장 데이마켓(주간거래): 10:00 ~ 18:00 · 서머타임 09:00 ~ 17:00 · 대체거래소라 거래가 적어요', '미장 프리마켓: 18:00 ~ 23:30 · 서머타임 17:00 ~ 22:30',
+        '미장 정규장: 23:30 ~ 다음 날 06:00 · 서머타임 22:30 ~ 05:00', '미장 애프터마켓: 06:00 ~ 10:00 · 서머타임 05:00 ~ 09:00 · 증권사마다 끝나는 시간이 달라요', '코인: 24시간',
+        '타점 알림과 점수는 미장 정규장 가격으로 계산해요. 가격 알림은 프리·애프터마켓 가격도 봐요 (데이마켓 가격은 증권사 앱에서 확인).',
+        '휴장일과 미장 조기 마감은 첫 화면 장 시간에 반영돼요. 국장 2027년 휴장일은 거래소 공식 발표 전이라 공휴일 기준이에요.'])) +
       sec('꼭 지켜 주세요', li(['손절가는 꼭 지켜요. 버티다 손실이 커지는 경우가 가장 많아요.', '빌린 돈이나 당장 필요한 돈으로 하지 않아요.', '알림은 참고 정보예요. 투자 판단과 책임은 본인에게 있어요.'])) +
       '</main>' + menu('');
   }
@@ -1561,6 +1654,10 @@
     span: function (t) { S.liveSpan = t.dataset.v; render(); },
     refresh: function () { if (!S.loading) { toast('새로 불러와요'); loadFeed(); } },
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
+    login: function (t) { signIn(t.dataset.v); },
+    logout: function () { signOut(false); toast('로그아웃했어요. 이 휴대폰의 기록은 남아 있어요'); },
+    syncnow: function () { pushNow().then(function () { toast(S.syncErr ? '저장하지 못했어요' : '계정에 저장했어요'); render(); }); },
+    delacct: function () { S.delAcct = (S.delAcct || 0) + 1; if (S.delAcct >= 3) deleteAccount(); else { if (S.delAcct === 1) S.delAcct = 2; render(); } },
     ashare: function (t) { var a = ((S.feed && S.feed.alerts) || []).filter(function (x) { return String(x.id) === t.dataset.v; })[0]; if (a) shareAlert(a); },
     hshare: function (t) {
       var h = holds().filter(function (x) { return x.id === t.dataset.v; })[0], an = h && S.han && S.han.data && S.han.data.an && S.han.data.an[h.yt];
@@ -1617,6 +1714,8 @@
     devtap: function () { S.devTaps = (S.devTaps || 0) + 1; clearTimeout(S.devTimer); S.devTimer = setTimeout(function () { S.devTaps = 0; }, 2500); if (S.devTaps >= 7) { S.devTaps = 0; location.hash = '#/dev'; } },
     fbkind: function (t) { var ta = document.querySelector('textarea[name=body]'); if (ta) S.fbDraft = ta.value; S.fbKind = t.dataset.v; render(); },
     fbagain: function () { S.fbSent = false; S.fbDraft = ''; render(); },
+    devreplyon: function (t) { S.devReply = +t.dataset.v; render(); var ta = document.querySelector('form[data-form=devreply] textarea'); if (ta) ta.focus(); },
+    devreplyoff: function () { S.devReply = null; render(); },
     mvhide: function () { var M = S.feed && S.feed.movers; store.set(K.moversHide, ((M && M.at) || '').slice(0, 10)); render(); },
     mvpick: function (t) { S.hsel = { yt: t.dataset.v, code: t.dataset.c, name: t.dataset.n, market: t.dataset.m }; location.hash = '#/hold/add'; },
     anndis: function () { markSeen(); render(); },
@@ -1745,14 +1844,30 @@
         .catch(paErr).then(function () { S.busy = false; render(); });
       return;
     }
+    if (form === 'devreply') {
+      e.preventDefault();
+      var rb = (e.target.body.value || '').trim(), rid = +e.target.getAttribute('data-id');
+      if (!rb) { toast('답글을 적어 주세요'); return; }
+      S.busy = true; render();
+      rpc('app_dev_reply', { p_key: devKey(), p_id: rid, p_body: rb })
+        .then(function (ok) { if (ok === true) { S.devReply = null; toast('답글을 달았어요'); S.devfb = null; loadDevFb(true); } else toast('답글을 달지 못했어요'); })
+        .catch(function () { toast('답글을 달지 못했어요'); })
+        .then(function () { S.busy = false; render(); });
+      return;
+    }
     if (form === 'feedback') {
       e.preventDefault();
       var fbody = (e.target.body.value || '').trim();
       if (fbody.length < 2) { toast('내용을 조금 더 적어 주세요'); return; }
       if (!LIVE) { S.fbSent = true; render(); return; }
       S.busy = true; S.fbDraft = fbody; render();
-      rpc('app_feedback', { p_code: code(), p_kind: S.fbKind || '제안', p_body: fbody, p_ver: (S.ann && S.ann[0] && S.ann[0].id) || '' })
-        .then(function (ok) { if (ok === true) { S.fbSent = true; S.fbDraft = ''; } else toast('지금은 보낼 수 없어요. 잠시 뒤 다시 해 주세요'); })
+      var ftok = randStr(), wantMail = !!(e.target.mail && e.target.mail.checked);
+      S.fbMail = e.target.mail ? wantMail : S.fbMail;
+      rpcAs('app_feedback2', { p_code: code(), p_kind: S.fbKind || '제안', p_body: fbody, p_ver: (S.ann && S.ann[0] && S.ann[0].id) || '', p_tok: ftok, p_mail: wantMail })
+        .then(function (r) {
+          if (r && r.ok) { S.fbSent = true; S.fbDraft = ''; var mine = fbMine(); mine.unshift({ id: r.id, tok: ftok, at: new Date().toISOString() }); store.set(K.fbmine, mine.slice(0, 30)); S.fbm = null; }
+          else toast('지금은 보낼 수 없어요. 잠시 뒤 다시 해 주세요');
+        })
         .catch(function () { toast('보내지 못했어요. 인터넷 연결을 확인해 주세요'); })
         .then(function () { S.busy = false; render(); });
       return;
@@ -1797,6 +1912,146 @@
     live: { week: { us: { '높음': { n: 2, win: 2, sum: 1.2 }, '보통': { n: 3, win: 1, sum: -0.5 } } }, all: {}, held: 1, waiting: 2, paused: [] }
   };
 
+
+  // ---------- 로그인 (카카오 · 네이버 · Google) — 선택 사항, 로그인하면 기록을 계정에 저장 ----------
+  // Supabase Auth의 PKCE 방식: 로그인 화면 → 이 앱 주소?code=... 로 돌아오면 토큰으로 바꿈. 비밀값은 앱에 없음.
+  var SYNC_KEYS = [K.hold, K.jr, K.prefs, K.hind, K.broker, K.theme];
+  var PROVIDERS = { kakao: { name: '카카오', id: 'kakao' }, naver: { name: '네이버', id: 'custom:naver' }, google: { name: 'Google', id: 'google' } };
+  K.auth = 'tn_auth'; K.sync = 'tn_sync'; K.pkce = 'tn_pkce';
+  function authBase() { return (CFG.supabaseUrl || '').replace(/\/$/, '') + '/auth/v1'; }
+  function session() { var x = store.get(K.auth, null); return x && x.access_token ? x : null; }
+  function b64url(buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function randStr() { var a = new Uint8Array(48); crypto.getRandomValues(a); return b64url(a); }
+  function signIn(key) {
+    var pv = PROVIDERS[key];
+    if (!LIVE || !pv) { toast('앱 연결이 끝나면 쓸 수 있어요'); return; }
+    if (!(window.crypto && crypto.subtle)) { toast('이 브라우저는 로그인을 지원하지 않아요'); return; }
+    var verifier = randStr();
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (h) {
+      store.set(K.pkce, { v: verifier, p: key, at: Date.now(), back: location.hash || '#/settings' });
+      var q = new URLSearchParams({ provider: pv.id, redirect_to: location.origin + location.pathname, code_challenge: b64url(h), code_challenge_method: 's256' });
+      location.href = authBase() + '/authorize?' + q.toString();
+    });
+  }
+  function saveSession(t) {
+    if (!t || !t.access_token) throw new Error('no token');
+    var u = t.user || {}, md = u.user_metadata || {};
+    store.set(K.auth, { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: t.expires_at || Math.floor(Date.now() / 1000) + (t.expires_in || 3600),
+      user: { id: u.id, provider: (u.app_metadata || {}).provider || '', name: md.name || md.full_name || md.nickname || md.preferred_username || '', email: u.email || '' } });
+  }
+  function authPost(path, body) {
+    return fetch(authBase() + path, { method: 'POST', headers: { apikey: CFG.supabaseKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error_description || j.msg || j.error || ('HTTP ' + r.status)); return j; }); });
+  }
+  function freshToken() {                  // 만료 1분 전이면 새로 받음
+    var x = session();
+    if (!x) return Promise.resolve(null);
+    if (x.expires_at - 60 > Date.now() / 1000) return Promise.resolve(x.access_token);
+    return authPost('/token?grant_type=refresh_token', { refresh_token: x.refresh_token }).then(function (t) { saveSession(t); return t.access_token; })
+      .catch(function () { store.del(K.auth); render(); return null; });
+  }
+  function userRest(method, path, body, extra) {
+    return freshToken().then(function (tok) {
+      if (!tok) throw new Error('signed out');
+      var h = { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' };
+      for (var k in (extra || {})) h[k] = extra[k];
+      return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/' + path, { method: method, headers: h, body: body == null ? undefined : JSON.stringify(body) })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 || r.status === 201 && method === 'POST' ? null : r.json(); });
+    });
+  }
+  function localBlob() { var d = {}; SYNC_KEYS.forEach(function (k) { var v = store.get(k, undefined); if (v !== undefined) d[k] = v; }); return d; }
+  function mergeById(a, b) {             // 같은 id는 이 휴대폰 쪽을 남기고 합침
+    var seen = {}, out = [];
+    (Array.isArray(a) ? a : []).concat(Array.isArray(b) ? b : []).forEach(function (x) { if (x && x.id != null && !seen[x.id]) { seen[x.id] = 1; out.push(x); } });
+    return out;
+  }
+  var pushTimer = null, syncing = false;
+  function pushNow() {
+    var x = session();
+    if (!x || !LIVE) return Promise.resolve();
+    clearTimeout(pushTimer);
+    var at = new Date().toISOString();
+    return userRest('POST', 'user_data?on_conflict=user_id', { user_id: x.user.id, data: localBlob(), updated_at: at }, { Prefer: 'resolution=merge-duplicates,return=minimal' })
+      .then(function () { var sy = store.get(K.sync, {}) || {}; sy.pushed = at; sy.uid = x.user.id; localStorage.setItem(K.sync, JSON.stringify(sy)); S.syncErr = false; })
+      .catch(function () { S.syncErr = true; });
+  }
+  onSet = function (k) {
+    if (syncing || SYNC_KEYS.indexOf(k) < 0 || !session()) return;
+    clearTimeout(pushTimer); pushTimer = setTimeout(function () { pushNow().then(function () { if (route().p === 'settings') render(); }); }, 1500);
+  };
+  function pullAndMerge(first) {         // 처음 로그인: 합치기 / 그다음: 서버가 더 최근이면 서버 기록으로
+    var x = session();
+    if (!x) return Promise.resolve();
+    return userRest('GET', 'user_data?select=data,updated_at&user_id=eq.' + encodeURIComponent(x.user.id)).then(function (rows) {
+      var row = rows && rows[0], sy = store.get(K.sync, {}) || {};
+      if (!row) return pushNow();
+      var d = row.data || {}, mine = sy.uid === x.user.id && sy.pushed;
+      syncing = true;
+      try {
+        if (first || !mine) {
+          store.set(K.hold, mergeById(store.get(K.hold, []), d[K.hold]));
+          store.set(K.jr, mergeById(store.get(K.jr, []), d[K.jr]));
+          [K.prefs, K.hind, K.broker, K.theme].forEach(function (k) { if (d[k] !== undefined && store.get(k, undefined) === undefined) store.set(k, d[k]); });
+        } else if (row.updated_at > sy.pushed) {
+          SYNC_KEYS.forEach(function (k) { if (d[k] !== undefined) store.set(k, d[k]); });
+        }
+      } finally { syncing = false; }
+      applyTheme(); S.han = null;
+      return (first || !mine || row.updated_at <= sy.pushed) ? pushNow() : (function () { var s2 = store.get(K.sync, {}) || {}; s2.pushed = row.updated_at; s2.uid = x.user.id; localStorage.setItem(K.sync, JSON.stringify(s2)); })();
+    }).catch(function () { S.syncErr = true; });
+  }
+  function handleAuthReturn() {          // 로그인 화면에서 돌아온 경우
+    var q = new URLSearchParams(location.search), code = q.get('code'), err = q.get('error_description') || q.get('error');
+    if (!code && !err) return;
+    var pk = store.get(K.pkce, null), back = (pk && pk.back) || '#/settings';
+    history.replaceState(null, '', location.pathname + back);
+    store.del(K.pkce);
+    if (err) { setTimeout(function () { toast('로그인하지 못했어요: ' + String(err).slice(0, 60)); }, 600); return; }
+    if (!pk || Date.now() - pk.at > 15 * 60000) { setTimeout(function () { toast('로그인 시간이 지났어요. 다시 해 주세요'); }, 600); return; }
+    S.authBusy = true;
+    authPost('/token?grant_type=pkce', { auth_code: code, code_verifier: pk.v }).then(function (t) {
+      saveSession(t); return pullAndMerge(true);
+    }).then(function () { S.authBusy = false; S.agreedNow = S.agreedNow || store.get(K.consent, false); toast('로그인했어요. 기록이 계정에 저장돼요'); render(); })
+      .catch(function () { S.authBusy = false; store.del(K.auth); toast('로그인하지 못했어요. 잠시 뒤 다시 해 주세요'); render(); });
+  }
+  function signOut(wipe) {
+    var x = session();
+    if (x) fetch(authBase() + '/logout', { method: 'POST', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + x.access_token } }).catch(function () {});
+    store.del(K.auth); store.del(K.sync);
+    if (wipe) { syncing = true; [K.hold, K.jr].forEach(function (k) { store.del(k); }); syncing = false; S.han = null; }
+    render();
+  }
+  function deleteAccount() {
+    S.authBusy = true; render();
+    freshToken().then(function (tok) {
+      return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/app_delete_me', { method: 'POST', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); });
+    }).then(function () { S.authBusy = false; S.delAcct = 0; store.del(K.auth); store.del(K.sync); toast('계정과 저장된 기록을 지웠어요. 이 휴대폰의 기록은 남아 있어요'); render(); })
+      .catch(function () { S.authBusy = false; toast('지우지 못했어요. 잠시 뒤 다시 해 주세요'); render(); });
+  }
+  function accountCard() {
+    var x = session();
+    if (!x) {
+      return '<section class="card"><h2 style="font-size:15px">내 기록 저장 <small class="small">선택</small></h2>' +
+        '<p class="small" style="margin:6px 0 10px">로그인하면 보유 종목·매매일지·설정이 계정에 저장돼서, 휴대폰을 바꾸거나 앱을 다시 깔아도 그대로예요. 로그인 없이도 모든 기능을 쓸 수 있어요.</p>' +
+        '<div class="logins"><button class="lg-kakao" data-act="login" data-v="kakao"' + (S.authBusy ? ' disabled' : '') + '>카카오로 시작</button>' +
+        '<button class="lg-naver" data-act="login" data-v="naver"' + (S.authBusy ? ' disabled' : '') + '>네이버로 시작</button>' +
+        '<button class="lg-google" data-act="login" data-v="google"' + (S.authBusy ? ' disabled' : '') + '>Google로 시작</button></div>' +
+        '<p class="small" style="margin:8px 0 0">로그인하면 보유 수량·평균 단가와 매매일지가 계정과 함께 서버에 저장돼요. 이름·전화번호는 받지 않고, 운영자는 개수만 합계로 봐요.</p></section>';
+    }
+    var sy = store.get(K.sync, {}) || {}, pv = { kakao: '카카오', google: 'Google', 'custom:naver': '네이버' }[x.user.provider] || x.user.provider || '';
+    var del = S.delAcct === 2 ? '정말 지울까요? 한 번 더 누르세요' : '계정과 저장된 기록 지우기';
+    return '<section class="card"><h2 style="font-size:15px">내 기록 저장</h2>' +
+      '<div class="line"><span>' + esc(pv) + '로 로그인</span><b>' + esc(x.user.name || x.user.email || '사용자') + '</b></div>' +
+      '<div class="line"><span>마지막 저장</span><b>' + (S.syncErr ? '<span class="blue">저장 실패 · 다시 시도해요</span>' : sy.pushed ? since(sy.pushed) : '-') + '</b></div>' +
+      '<div class="two" style="margin-top:8px"><button class="btn ghost" data-act="syncnow">지금 저장</button><button class="btn ghost" data-act="logout">로그아웃</button></div>' +
+      '<button class="btn ghost" style="margin-top:8px;color:var(--red-ink)" data-act="delacct"' + (S.authBusy ? ' disabled' : '') + '>' + del + '</button>' +
+      '<p class="small" style="margin:8px 0 0">로그아웃해도 이 휴대폰의 기록은 남아요. 계정을 지우면 서버에 저장된 기록이 바로 지워져요.</p></section>';
+  }
+
+  handleAuthReturn();
+  setTimeout(function () { loadFbMine(false, false); }, 2500);
+  if (session()) setTimeout(function () { pullAndMerge(false).then(function () { if (route().p === 'hold' || route().p === 'settings') render(); }); }, 1500);
   render();
   if (store.get(K.consent, false)) loadFeed();
   loadNotices();
