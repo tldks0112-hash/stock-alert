@@ -1661,7 +1661,7 @@
     refresh: function () { if (!S.loading) { toast('새로 불러와요'); loadFeed(); } },
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
     login: function (t) { signIn(t.dataset.v); },
-    logout: function () { signOut(false); toast('로그아웃했어요. 이 휴대폰의 기록은 남아 있어요'); },
+    signout: function () { signOut(false); toast('로그아웃했어요. 이 휴대폰의 기록은 남아 있어요'); },
     syncnow: function () { pushNow().then(function () { toast(S.syncErr ? '저장하지 못했어요' : '계정에 저장했어요'); render(); }); },
     delacct: function () { S.delAcct = (S.delAcct || 0) + 1; if (S.delAcct >= 3) deleteAccount(); else { if (S.delAcct === 1) S.delAcct = 2; render(); } },
     ashare: function (t) { var a = ((S.feed && S.feed.alerts) || []).filter(function (x) { return String(x.id) === t.dataset.v; })[0]; if (a) shareAlert(a); },
@@ -2000,7 +2000,7 @@
     return '<section class="card"><h2 style="font-size:15px">내 기록 저장</h2>' +
       '<div class="line"><span>' + esc(pv) + '로 로그인</span><b>' + esc(x.user.name || x.user.email || '사용자') + '</b></div>' +
       '<div class="line"><span>마지막 저장</span><b>' + (S.syncErr ? '<span class="blue">저장 실패 · 다시 시도해요</span>' : sy.pushed ? since(sy.pushed) : '-') + '</b></div>' +
-      '<div class="two" style="margin-top:8px"><button class="btn ghost" data-act="syncnow">지금 저장</button><button class="btn ghost" data-act="logout">로그아웃</button></div>' +
+      '<div class="two" style="margin-top:8px"><button class="btn ghost" data-act="syncnow">지금 저장</button><button class="btn ghost" data-act="signout">로그아웃</button></div>' +
       '<button class="btn ghost" style="margin-top:8px;color:var(--red-ink)" data-act="delacct"' + (S.authBusy ? ' disabled' : '') + '>' + del + '</button>' +
       '<p class="small" style="margin:8px 0 0">로그아웃해도 이 휴대폰의 기록은 남아요. 계정을 지우면 서버에 저장된 기록이 바로 지워져요.</p></section>';
   }
