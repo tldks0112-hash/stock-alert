@@ -58,6 +58,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          NAVER_API_KEY_ID: ${{ secrets.NAVER_API_KEY_ID }}   # 네이버 뉴스 검색 (없으면 구글 뉴스)
+          NAVER_API_KEY: ${{ secrets.NAVER_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}                 # 의견 답글 메일 (없으면 앱에서만 보임)
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python realtime_alert.py
 
       - name: 기록 저장
