@@ -91,6 +91,9 @@ KAKAO_SHORT = S.get("카톡_짧게", True)        # True: 카톡은 한 줄 요�
 APP_URL = "https://tldks0112-hash.github.io/stock-alert/"
 KAKAO_PRESET = str(S.get("카톡_조건", "추천"))   # 카톡도 앱의 추천 설정대로 ("안정"/"기회"도 가능, "기존"이면 예전 방식)
 KAKAO_RULES = None                              # 실행할 때 앱 서버에서 그 설정의 시장별 조건을 받아 옴
+KAKAO_HOLD_ONLY = bool(S.get("카톡_보유만", True))  # True: 카톡은 내가 앱 '보유'에 넣은 종목 알림만 (아침 브리핑·주간 보고도 카톡엔 안 보냄)
+MY_HOLD = None                                  # 실행할 때 앱 서버에서 받아 옴: {시장: {종목: 이름}} (개발자 화면에서 정한 계정 하나)
+KAKAO_ONLY = set()                              # 감시 목록에 없고 내 보유에만 있는 종목 → 카톡만 (앱 피드엔 안 올림)
 APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
@@ -1163,7 +1166,12 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         once = side == "buy" and guard_on(market, "하루_한번")
         to_kakao, to_app_ = False, False
         k_rule = (KAKAO_RULES or {}).get(market)
-        if in_cooldown(state, key, now, market, once):
+        held = t in ((MY_HOLD or {}).get(market) or {})
+        if held and side == "sell":
+            flags["linked"] = True                 # 내가 보유에 넣은 종목은 매도 알림도 보냄
+        if KAKAO_HOLD_ONLY and not held:
+            log(f"{t}: {word} 타점 {score}/10 · 내 보유 종목이 아니라 카톡 안 함")
+        elif in_cooldown(state, key, now, market, once):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
         elif side == "sell" and not SELL_ALL and not flags["linked"]:
             log(f"{t}: 매도 타점 {score}/10 · 보유·최근 매수 알림 없는 종목이라 카톡 안 함")
@@ -1181,7 +1189,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(blocked + hard)})")
         else:
             to_kakao = True
-        if app_bridge.enabled() and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once):
+        if app_bridge.enabled() and t not in KAKAO_ONLY and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once):
             to_app_ = True
         if to_kakao or to_app_:
             alerts.append({"key": key, "akey": akey, "kakao": to_kakao, "app": to_app_,
@@ -1271,6 +1279,17 @@ def to_app(alerts, book, now):
         return {"error": f"{step}: {app_bridge.why(e)}"}
 
 
+def with_my_hold(market, cats):
+    """감시 목록 + 내 보유 종목 (감시 목록에 없는 보유 종목은 '내 보유' 묶음으로 더해서 카톡용으로만 확인)"""
+    mine = (MY_HOLD or {}).get(market) or {}
+    have = {t for group in cats.values() for t in group}
+    extra = {t: n for t, n in mine.items() if t not in have}
+    if not extra:
+        return cats
+    KAKAO_ONLY.update(extra)
+    return {**cats, "내 보유": extra}
+
+
 def kakao_rules():
     """카톡 조건: 앱 서버의 추천 설정에서 시장별 조건을 받아 옴. 못 받으면 None → 예전 방식"""
     if KAKAO_PRESET in ("기존", "") or not app_bridge.enabled():
@@ -1286,9 +1305,14 @@ def kakao_rules():
 
 
 def main():
-    global KAKAO_RULES
+    global KAKAO_RULES, MY_HOLD
     force = os.environ.get("FORCE") == "1" or "force" in sys.argv
     KAKAO_RULES = kakao_rules()
+    if KAKAO_HOLD_ONLY:
+        try:
+            MY_HOLD = app_bridge.owner_holds()
+        except Exception as e:
+            log(f"내 보유 종목 받기 실패 ({app_bridge.why(e)}) → 이번엔 카톡 알림 없음")
     if not any(MARKETS.values()):
         sys.exit("❗ 비밀값 ALERT_SETTINGS에 종목이 없어요. 설정 방법을 다시 확인해 주세요.")
     now = datetime.now(timezone.utc)
@@ -1300,7 +1324,7 @@ def main():
     alerts, notices = [], []
     stats = {"markets": 0, "checked": 0, "failed": 0}
     for market, cats in MARKETS.items():
-        if not cats:
+        if not cats and not (MY_HOLD or {}).get(market):
             continue
         if not is_open(market, now) and not force:
             log(f"[{market}] 장 시간이 아니라 건너뜀")
@@ -1308,7 +1332,7 @@ def main():
         log(f"[{market}] 확인 중...")
         stats["markets"] += 1
         scanned.append(market)
-        scan_market(market, cats, now, force, state, alerts, stats, card, book, notices)
+        scan_market(market, with_my_hold(market, cats), now, force, state, alerts, stats, card, book, notices)
 
     # 주인 없는 오래된 기록 정리 (종목을 설정에서 뺀 경우 등)
     old = pd.Timestamp(now) - pd.Timedelta(days=RUN_DAYS + 20)
@@ -1323,19 +1347,20 @@ def main():
         except Exception as e:
             log(f"아침 브리핑 앱 저장·푸시 실패 ({app_bridge.why(e)})")
 
-    if any(a["kakao"] for a in alerts) or notices or brief:
+    k_brief, k_notices = (None, []) if KAKAO_HOLD_ONLY else (brief, notices)   # 보유만 받기: 브리핑·주간 보고는 앱에서만
+    if any(a["kakao"] for a in alerts) or k_notices or k_brief:
         token = base.get_access_token()
-        for msg in kakao_chunks(brief[1]) if brief else []:
+        for msg in kakao_chunks(k_brief[1]) if k_brief else []:
             send_short(token, msg)
             time.sleep(1)
-        for msg in notices:
+        for msg in k_notices:
             base.send_kakao(token, msg)
             time.sleep(1)
         ordered = []
         for market, cats in MARKETS.items():
             order = {c: i for i, c in enumerate(cats)}
             ordered += sorted((a for a in alerts if a["market"] == market and a["kakao"]),
-                              key=lambda a: order[a["category"]])
+                              key=lambda a: order.get(a["category"], len(order)))
         if KAKAO_SHORT and ordered:
             for msg in short_messages(ordered, now):
                 send_short(token, msg)
@@ -1400,6 +1425,8 @@ def main():
         else:
             tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
     mode = f" · 카톡 {KAKAO_PRESET}" if KAKAO_RULES else " · 카톡 기존 방식"
+    if KAKAO_HOLD_ONLY:
+        mode += f" · 보유만 {sum(len(v) for v in MY_HOLD.values())}종목" if MY_HOLD is not None else " · 보유만 (계정 연결 전)"
     mode += f" · 아침 브리핑 (푸시 {brief_pushed}건)" if brief else ""
     mode += hold_note
     print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}{mode}")
