@@ -46,6 +46,10 @@ try:                                   # 가격 알림 파일을 아직 안 올�
     import price_watch
 except ImportError:
     price_watch = None
+try:                                   # 의견 답글 메일 (파일이 없어도 엔진은 그대로)
+    import mailer
+except ImportError:
+    mailer = None
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
 # ======================= 설정 =======================
@@ -183,12 +187,12 @@ def calm_time(market, ts):
 
 # ---------- 데이터 ----------
 
-def fetch_many(tickers, period, interval):
+def fetch_many(tickers, period, interval, prepost=False):
     for attempt in range(3):
         try:
             with base.quiet():
                 raw = yf.download(tickers, period=period, interval=interval, group_by="ticker",
-                                  auto_adjust=True, progress=False, threads=True)
+                                  auto_adjust=True, progress=False, threads=True, prepost=prepost)
             break
         except Exception as e:
             log(f"데이터 받기 재시도 ({e})")
@@ -1371,6 +1375,12 @@ def main():
     except Exception as e:
         log(f"가격 알림 실패 ({app_bridge.why(e)})")
         hold_note += " · 가격 알림 실패"
+    try:                                          # 의견 답글을 메일로
+        if mailer:
+            hold_note += mailer.run()
+    except Exception as e:
+        log(f"답글 메일 실패 ({app_bridge.why(e)})")
+        hold_note += " · 답글 메일 실패"
     save_book(book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""

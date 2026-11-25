@@ -7,13 +7,15 @@
 
 공개 실행 기록에는 종목 이름 · 코드를 남기지 않고 개수만 남겨요.
 """
+import html
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -26,6 +28,10 @@ NEWS_MAX = 150                     # 한 번에 뉴스를 받을 종목 수
 NEWS_KEEP = 6                      # 종목당 보관하는 기사 수
 BREAK_MIN = 60                     # 이 시간(분) 안의 기사는 '속보'
 UA = {"User-Agent": "Mozilla/5.0 (tajeom-note news)"}
+# 네이버 뉴스 검색 (NAVER API HUB). 비밀값 두 개가 있으면 구글 뉴스 대신 이것만 씀 — 결과를 순서·내용 그대로 보여 주고 출처·원문 링크를 붙임
+NAVER_ID = ab._clean(os.environ.get("NAVER_API_KEY_ID"))
+NAVER_KEY = ab._clean(os.environ.get("NAVER_API_KEY"))
+NAVER_URL = "https://naverapihub.apigw.ntruss.com/search/v1/news"
 # 미장 종목 뉴스 검색어 (한글 이름이 애매한 것)
 US_Q = {"GOOGL": "구글", "GOOG": "구글", "SCHD": "SCHD", "TQQQ": "TQQQ", "SOXL": "SOXL", "QQQ": "QQQ",
         "SPY": "S&P500", "VOO": "VOO", "AMD": "AMD", "TSM": "TSMC", "ARM": "ARM 반도체", "V": "비자 카드",
@@ -143,6 +149,59 @@ def query_for(yt, market, name, alias):
     return f'"{nm}" when:3d', "ko"
 
 
+def naver_query(yt, market, name, alias):
+    """네이버 검색어 (따옴표·기간 문법 없이) — 한글 이름 우선"""
+    if market == "us":
+        if yt in US_Q:
+            return US_Q[yt]
+        for t in (name, alias or holdings.ALIAS.get(yt)):
+            if t and HANGUL.search(t):
+                return t.split()[0]
+        return CORP.sub("", re.split(r"\s+-\s+|\s+Class\s+|\s+Common\s+", name or yt)[0]).strip() or yt
+    nm = (name or "").strip()
+    if not nm:
+        return None
+    return f"{nm} 코인" if market == "crypto" and "코인" not in nm else nm
+
+
+def _host(u):
+    try:
+        h = urlparse(u).hostname or ""
+        return h[4:] if h.startswith("www.") else h
+    except Exception:
+        return ""
+
+
+def parse_naver(data, now):
+    """네이버 응답 → 기사 목록 (받은 순서 그대로, 굵게 표시 태그만 빼고 글자는 그대로)"""
+    out = []
+    for it in data.get("items") or []:
+        title = html.unescape(re.sub(r"</?b>", "", it.get("title") or "")).strip()
+        orig, nlink = (it.get("originallink") or "").strip(), (it.get("link") or "").strip()
+        link = orig if orig.startswith("https://") else nlink if nlink.startswith("https://") else ""
+        if not title or not link:
+            continue
+        try:
+            at = parsedate_to_datetime(it.get("pubDate") or "").astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if at > now + timedelta(minutes=10) or now - at > timedelta(days=4):
+            continue
+        age = now - at
+        brk = age <= timedelta(minutes=BREAK_MIN) or ("속보" in title[:12] and age <= timedelta(hours=6))
+        out.append({"t": title[:200], "s": _host(orig or link)[:40], "u": link[:600], "at": at.isoformat(), "brk": brk, "p": "naver"})
+        if len(out) >= NEWS_KEEP:
+            break
+    return out
+
+
+def nnews(q, now):
+    r = requests.get(NAVER_URL, params={"query": q, "display": 10, "sort": "date"}, timeout=12,
+                     headers={"X-NCP-APIGW-API-KEY-ID": NAVER_ID, "X-NCP-APIGW-API-KEY": NAVER_KEY})
+    r.raise_for_status()
+    return parse_naver(r.json(), now)
+
+
 def gnews(q, lang, now):
     loc = "hl=ko&gl=KR&ceid=KR:ko" if lang == "ko" else "hl=en-US&gl=US&ceid=US:en"
     r = requests.get(f"https://news.google.com/rss/search?q={quote(q)}&{loc}", headers=UA, timeout=12)
@@ -191,14 +250,17 @@ def news_job(rt, book, now):
         nm, al = names.get(yt, (None, None))
         if m == "crypto" and not nm:
             nm = yt.replace("-KRW", "")
-        q, lang = query_for(yt, m, nm or (yt if m == "us" else None), al)
+        if NAVER_ID and NAVER_KEY:
+            q, lang = naver_query(yt, m, nm or (yt if m == "us" else None), al), "naver"
+        else:
+            q, lang = query_for(yt, m, nm or (yt if m == "us" else None), al)
         if q:
             jobs.append((yt, m, q, lang))
 
     def one(job):
         yt, m, q, lang = job
         try:
-            return yt, m, gnews(q, lang, now)
+            return yt, m, (nnews(q, now) if lang == "naver" else gnews(q, lang, now))
         except Exception:
             return yt, m, None
 

@@ -21,7 +21,7 @@ import app_bridge as ab
 H = (1, 5, 20)                                         # 예상 기간 (거래일)
 IND = [("trend", "단기 상승세"), ("mid", "중기 상승세"), ("align", "상승 정렬"), ("mom", "사는 힘 우세"),
        ("macd", "오름 가속"), ("vol", "거래 활발"), ("mkt", "시장 상승세"), ("calm", "덜 흔들림")]
-FUND_EVERY = timedelta(hours=20)                       # 재무 정보 (투자 대가 관점용) 다시 받는 간격
+FUND_EVERY = timedelta(hours=20)                       # 재무 정보 (투자 원칙 점검표용) 다시 받는 간격
 FUND_PER_RUN = 25                                      # 한 번 실행에 재무 정보를 받는 종목 수
 FUND_KEYS = ("trailingPE", "priceToBook", "returnOnEquity", "debtToEquity", "profitMargins", "earningsGrowth",
              "revenueGrowth", "earningsQuarterlyGrowth", "currentRatio", "dividendRate", "trailingAnnualDividendYield",
@@ -184,7 +184,7 @@ def market_series(rt, market, idx_daily):
 
 
 def market_stats(rt, market, idx_daily):
-    """대표 지수: 200일 평균 대비 위치의 1년 백분위 · 상승 흐름 여부 · 6개월/1년 수익률 (투자 대가 관점용)"""
+    """대표 지수: 200일 평균 대비 위치의 1년 백분위 · 상승 흐름 여부 · 6개월/1년 수익률 (투자 원칙 점검표용)"""
     if idx_daily is None or len(idx_daily) < 210:
         return None
     c = idx_daily["Close"].dropna()
@@ -320,17 +320,17 @@ def axes(market, pct, fund):
     return {"power": power, "calm": calm, "value": value, "growth": growth, "health": health}
 
 
-# ---------- 투자 대가 관점 (공개된 원칙을 단순화한 점검표) ----------
+# ---------- 투자 원칙 점검표 (널리 알려진 원칙을 단순화, 특정 인물 이름은 쓰지 않음) ----------
 
 LEGENDS = [
-    ("minervini", "마크 미너비니", "트렌드 템플릿", "강한 상승 추세에 올라탄 종목만"),
-    ("livermore", "제시 리버모어", "신고가 돌파", "새 고점을 거래량과 함께 뚫을 때"),
-    ("oneil", "윌리엄 오닐", "CAN SLIM", "실적이 빠르게 느는 주도주의 돌파"),
-    ("buffett", "워런 버핏", "우량 기업", "돈 잘 벌고 빚 적은 회사를 적당한 값에"),
-    ("graham", "벤저민 그레이엄", "안전마진", "회사 가치보다 싸게 사서 안전하게"),
-    ("lynch", "피터 린치", "성장 대비 적정가", "성장에 비해 아직 싼 회사"),
+    ("trend", "상승 추세", "강한 상승 추세에 올라탄 종목만"),
+    ("breakout", "신고가 돌파", "새 고점을 거래량과 함께 뚫을 때"),
+    ("leader", "실적 주도주", "실적이 빠르게 느는 주도주의 돌파"),
+    ("quality", "우량 기업", "돈 잘 벌고 빚 적은 회사를 적당한 값에"),
+    ("value", "안전마진", "회사 가치보다 싸게 사서 안전하게"),
+    ("garp", "성장 대비 적정가", "성장에 비해 아직 싼 회사"),
 ]
-PRICE_ONLY = {"minervini", "livermore"}
+PRICE_ONLY = {"trend", "breakout"}
 
 
 def _f(fund, k):
@@ -350,7 +350,7 @@ def _both(a, b, fn):
 
 
 def legends(market, d, mstat, fund):
-    """종목 하나 → 대가별 [점검 항목 · 충족률 %]. 확인할 수 없는 항목은 ok=None (계산에서 빠짐)"""
+    """종목 하나 → 원칙별 [점검 항목 · 충족률 %]. 확인할 수 없는 항목은 ok=None (계산에서 빠짐)"""
     c, vol = d["Close"], d["Volume"].fillna(0)
     p = float(c.iloc[-1])
     ma = lambda n: float(c.rolling(n).mean().iloc[-1]) if len(c) >= n else None
@@ -378,7 +378,7 @@ def legends(market, d, mstat, fund):
     pc0 = lambda x: None if x is None else f"{x * 100:.0f}%"
     gap = lambda a, b: None if a is None or b is None else f"{(a / b - 1) * 100:+.1f}%"
     items = {
-        "minervini": [
+        "trend": [
             _ck("현재가가 150일·200일 평균보다 위", _both(ma150, ma200, lambda a, b: p > a and p > b)),
             _ck("150일 평균이 200일 평균보다 위", _both(ma150, ma200, lambda a, b: a > b)),
             _ck("200일 평균이 한 달째 오르는 중", _both(ma200, ma200_1m, lambda a, b: a > b)),
@@ -388,30 +388,30 @@ def legends(market, d, mstat, fund):
             _ck("1년 최고가와 25% 이내", p >= hi52 * 0.75, gap(p, hi52)),
             _ck("1년 수익률이 시장보다 높음", _both(r12, ms.get("r12"), lambda a, b: a > b), pc(r12)),
         ],
-        "livermore": [
+        "breakout": [
             _ck("1년 최고가와 5% 이내 (새 고점 근처)", p >= hi52 * 0.95, gap(p, hi52)),
             _ck("최근 20일 고점을 넘어섬", None if hi20 is None else p >= hi20, gap(p, hi20)),
             _ck("거래량이 평소의 1.3배 이상", None if vr is None else vr >= 1.3, None if vr is None else f"{vr:.1f}배"),
             _ck("큰 흐름이 위로 (50일 평균 > 200일 평균)", _both(ma50, ma200, lambda a, b: a > b)),
             _ck("시장이 상승 흐름", good),
         ],
-        "oneil": [
-            _ck("C · 최근 분기 이익 25% 이상 증가", None if eq is None else eq >= 0.25, pc(eq)),
-            _ck("A · 매출 20% 이상 성장", None if rg is None else rg >= 0.20, pc(rg)),
-            _ck("N · 1년 최고가와 15% 이내", p >= hi52 * 0.85, gap(p, hi52)),
-            _ck("S · 오른 날 거래량이 내린 날보다 많음 (50일)", None if updn is None else updn >= 1, None if updn is None else f"{updn:.2f}배"),
-            _ck("L · 6개월 수익률이 시장보다 높음", _both(r6, ms.get("r6"), lambda a, b: a > b), pc(r6)),
-            _ck("I · 기관 보유 20% 이상", None if inst is None else inst >= 0.20, pc0(inst)),
-            _ck("M · 시장이 상승 흐름", good),
+        "leader": [
+            _ck("최근 분기 이익 25% 이상 증가", None if eq is None else eq >= 0.25, pc(eq)),
+            _ck("매출 20% 이상 성장", None if rg is None else rg >= 0.20, pc(rg)),
+            _ck("1년 최고가와 15% 이내", p >= hi52 * 0.85, gap(p, hi52)),
+            _ck("오른 날 거래량이 내린 날보다 많음 (50일)", None if updn is None else updn >= 1, None if updn is None else f"{updn:.2f}배"),
+            _ck("6개월 수익률이 시장보다 높음", _both(r6, ms.get("r6"), lambda a, b: a > b), pc(r6)),
+            _ck("기관 보유 20% 이상", None if inst is None else inst >= 0.20, pc0(inst)),
+            _ck("시장이 상승 흐름", good),
         ],
-        "buffett": [
+        "quality": [
             _ck("ROE 15% 이상 (자기 돈으로 잘 범)", None if roe is None else roe >= 0.15, pc0(roe)),
             _ck("부채비율 50% 미만", None if de is None else de < 50, None if de is None else f"{de:.0f}%"),
             _ck("순이익률 15% 이상", None if pm is None else pm >= 0.15, pc0(pm)),
             _ck("이익이 늘고 있음", None if eg is None else eg > 0, pc(eg)),
             _ck("비싸지 않음 (PER 25 이하, 흑자)", None if pe is None else 0 < pe <= 25, None if pe is None else f"PER {pe:.1f}"),
         ],
-        "graham": [
+        "value": [
             _ck("흑자 회사", None if eps is None else eps > 0),
             _ck("PER 15 이하", None if pe is None else 0 < pe <= 15, None if pe is None else f"{pe:.1f}"),
             _ck("PBR 1.5 이하", None if pb is None else 0 < pb <= 1.5, None if pb is None else f"{pb:.2f}"),
@@ -419,7 +419,7 @@ def legends(market, d, mstat, fund):
             _ck("유동비율 2 이상 (단기 빚 갚을 힘)", None if cr is None else cr >= 2, None if cr is None else f"{cr:.1f}"),
             _ck("배당을 줌", None if div is None and divy is None else (div or 0) > 0 or (divy or 0) > 0),
         ],
-        "lynch": [
+        "garp": [
             _ck("PEG 1 이하 (PER ÷ 이익 성장률)", None if pe is None or eg is None or pe <= 0 or eg <= 0 else pe / (eg * 100) <= 1,
                 None if pe is None or eg is None or pe <= 0 or eg <= 0 else f"{pe / (eg * 100):.2f}"),
             _ck("이익 성장 15% 이상", None if eg is None else eg >= 0.15, pc(eg)),
@@ -429,15 +429,15 @@ def legends(market, d, mstat, fund):
         ],
     }
     out = []
-    for key, who, method, idea in LEGENDS:
+    for key, method, idea in LEGENDS:
         its = items[key]
         if market == "crypto" and key not in PRICE_ONLY:
-            out.append({"id": key, "who": who, "m": method, "idea": idea, "na": "코인은 회사 재무 정보가 없어서 볼 수 없어요"})
+            out.append({"id": key, "m": method, "idea": idea, "na": "코인은 회사 재무 정보가 없어서 볼 수 없어요"})
             continue
         known = [x for x in its if x["ok"] is not None]
         okn = sum(1 for x in known if x["ok"])
         enough = len(known) >= max(2, (len(its) + 1) // 2)
-        out.append({"id": key, "who": who, "m": method, "idea": idea, "items": its, "n": len(known), "pass": okn,
+        out.append({"id": key, "m": method, "idea": idea, "items": its, "n": len(known), "pass": okn,
                     "pct": int(round(okn / len(known) * 100)) if enough else None,
                     "na": None if enough else "확인할 수 있는 정보가 부족해요"})
     return out
@@ -556,7 +556,7 @@ def run(rt, book, now):
     since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     reqs = _get(f"hold_req?select=yt,market&last_at=gte.{since}&order=last_at.desc&limit={MAX_REQ}")
     fund, nf = {}, 0
-    try:                                               # 재무 정보 (투자 대가 관점) — 하루 한 번, 실행마다 조금씩
+    try:                                               # 재무 정보 (투자 원칙 점검표) — 하루 한 번, 실행마다 조금씩
         fund, nf = fund_job(rt, reqs, now)
         if nf:
             notes.append(f"재무 {nf}개")
