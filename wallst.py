@@ -45,6 +45,14 @@ def _get(url, **kw):
     return r
 
 
+def _why(e):
+    """건너뛴 이유를 짧게 (비밀값·종목 이름 없이)"""
+    r = getattr(e, "response", None)
+    if r is not None and getattr(r, "status_code", None):
+        return f"SEC {r.status_code}" + (" (연락처 메일 필요)" if r.status_code == 403 and "@" not in CONTACT else "")
+    return type(e).__name__[:30]
+
+
 def filings(cik):
     """→ (SEC 등록 이름, [13F-HR 공시: {acc, filed, period}] 최신순)"""
     d = _get(f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json").json()
@@ -210,7 +218,7 @@ def run(rt, book, now):
         return ""
     flags["wallst"] = now.isoformat()
     stored = {r["cik"]: r for r in holdings._get("wallst?select=cik,acc,period")}
-    done, fresh, skipped = 0, [], 0
+    done, fresh, skipped, why = 0, [], 0, {}
     for cik, key, ko in FUNDS:
         if done >= MAX_NEW:
             break
@@ -218,6 +226,7 @@ def run(rt, book, now):
             sec_name, fl = filings(cik)
             if key.lower() not in sec_name.lower() or not fl:
                 skipped += 1
+                why["이름 불일치" if fl else "13F 없음"] = why.get("이름 불일치" if fl else "13F 없음", 0) + 1
                 continue
             cur = fl[0]
             st = stored.get(cik) or {}
@@ -226,6 +235,7 @@ def run(rt, book, now):
             now_h = holdings_of(cik, cur["acc"])
             if now_h is None:
                 skipped += 1
+                why["보유표 없음"] = why.get("보유표 없음", 0) + 1
                 continue
             prev_f = fl[1] if len(fl) > 1 else None
             old = holdings._get(f"wallst?select=hold&cik=eq.{cik}") if st.get("period") and prev_f and st["period"] == prev_f["period"] else []
@@ -240,8 +250,14 @@ def run(rt, book, now):
             done += 1
             if st.get("acc"):          # 예전에 저장한 적이 있는 기관의 새 공시만 '새 소식'
                 fresh.append(s)
-        except Exception:
+        except Exception as e:
             skipped += 1
+            k = _why(e)
+            why[k] = why.get(k, 0) + 1
+    try:                             # 개발자 확인용 (공개 기록에는 숫자만): 왜 건너뛰었는지
+        ab.put_kv("wallst_status", {"at": now.isoformat(), "done": done, "skipped": skipped, "why": why, "contact": "@" in CONTACT})
+    except Exception:
+        pass
     if fresh:
         try:
             names = ", ".join(s["ko"] for s in fresh[:3]) + (f" 외 {len(fresh) - 3}곳" if len(fresh) > 3 else "")
@@ -253,4 +269,5 @@ def run(rt, book, now):
             pass
     if not (done or skipped):
         return ""
-    return f" · 월가 픽 {done}곳 갱신" + (f" (건너뜀 {skipped})" if skipped else "")
+    top = max(why, key=why.get) if why else ""
+    return f" · 월가 픽 {done}곳 갱신" + (f" (건너뜀 {skipped}{' · ' + top if top else ''})" if skipped else "")
