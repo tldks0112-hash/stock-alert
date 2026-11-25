@@ -84,6 +84,20 @@ def put_kv(key, value):
                          headers=_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})))
 
 
+def upsert(table, rows, on):
+    """여러 줄 저장 (같은 키는 덮어씀)"""
+    if not rows:
+        return
+    _check(requests.post(f"{URL}/rest/v1/{table}?on_conflict={on}", timeout=20, data=json.dumps(rows, ensure_ascii=False),
+                         headers=_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})))
+
+
+def recent_alert_yts(since):
+    """since 이후 앱 알림이 나온 종목 코드들 (차트 갱신 대상)"""
+    r = _check(requests.get(f"{URL}/rest/v1/alerts", timeout=15, headers=_headers(),
+                            params={"select": "yt", "created_at": f"gte.{since.isoformat()}", "limit": "1000"}))
+    return {x.get("yt") for x in r.json() if x.get("yt")}
+
 def get_kv(key):
     """앱 서버에 저장된 값 하나 (없으면 None)"""
     q = urllib.parse.quote(key, safe="")

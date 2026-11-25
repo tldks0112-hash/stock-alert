@@ -94,6 +94,7 @@ KAKAO_RULES = None                              # 실행할 때 앱 서버에서
 KAKAO_HOLD_ONLY = bool(S.get("카톡_보유만", True))  # True: 카톡은 내가 앱 '보유'에 넣은 종목 알림만 (아침 브리핑·주간 보고도 카톡엔 안 보냄)
 MY_HOLD = None                                  # 실행할 때 앱 서버에서 받아 옴: {시장: {종목: 이름}} (개발자 화면에서 정한 계정 하나)
 KAKAO_ONLY = set()                              # 감시 목록에 없고 내 보유에만 있는 종목 → 카톡만 (앱 피드엔 안 올림)
+CHART_SET = set()                               # 최근 3일 안에 앱 알림이 나온 종목 → 타점 상세 화면 차트(분·시·일·월)를 저장
 APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
@@ -174,22 +175,51 @@ def session(market, ts):
     return start, EARLY_CLOSE.get(market, {}).get(day, close)
 
 
+US_EXT = bool(S.get("미장_시간외", True))      # True: 미장 프리마켓·애프터마켓에도 타점 확인 (데이마켓은 무료 시세 자료가 없어서 못 봄)
+SESS_KO = {"pre": "프리마켓", "after": "애프터마켓"}
+
+
+def us_window(ts):
+    """미장 거래 구간 → (이름, 시작 분, 끝 분) · 프리 04:00~09:30 · 정규 09:30~16:00 · 애프터 16:00~20:00 (미국 동부시간, 조기 마감일은 17:00까지)"""
+    s = session("us", ts)
+    if not s:
+        return None
+    o, c = s
+    hm = _hm(ts, "us")[1]
+    if o <= hm < c:
+        return "reg", o, c
+    if US_EXT and 240 <= hm < o:
+        return "pre", 240, o
+    end = 1200 if c >= 960 else 1020
+    if US_EXT and c <= hm < end:
+        return "after", c, end
+    return None
+
+
 def is_open(market, now):
     if market == "crypto":
         return True
+    if market == "us":
+        return us_window(now) is not None
     s = session(market, now)
     return bool(s) and s[0] <= _hm(now, market)[1] <= s[1]
 
 
 def calm_time(market, ts):
-    """장 시작 직후 15분, 마감 직전 10분(국장은 동시호가 포함 15분)은 출렁임이 커서 타점으로 안 씀"""
+    """장(구간) 시작 직후 15분, 마감 직전 10분(국장은 동시호가 포함 15분)은 출렁임이 커서 타점으로 안 씀"""
     if market == "crypto":
         return True
+    if market == "us":
+        w = us_window(ts)
+        if not w:
+            return False
+        hm = _hm(ts, market)[1]
+        return w[1] + 15 <= hm <= w[2] - 10
     s = session(market, ts)
     if not s:
         return False
     hm = _hm(ts, market)[1]
-    return s[0] + 15 <= hm <= s[1] - (10 if market == "us" else 15)
+    return s[0] + 15 <= hm <= s[1] - 15
 
 
 # ---------- 데이터 ----------
@@ -276,8 +306,14 @@ def add_minute(m1, market):
     if market == "crypto":
         m1 = m1.iloc[-240:]
     else:
-        days = m1.index.tz_convert(TZ[market]).date
+        loc = m1.index.tz_convert(TZ[market])
+        days = loc.date
         m1 = m1[days == days[-1]]
+        if market == "us" and len(m1):              # 미장: 마지막 봉이 속한 구간(프리·정규·애프터)만 → 구간마다 평균 거래가(VWAP)를 따로
+            w = us_window(m1.index[-1].to_pydatetime())
+            if w:
+                hm = loc[days == days[-1]].hour * 60 + loc[days == days[-1]].minute
+                m1 = m1[(hm >= w[1]) & (hm < w[2])]
     if len(m1) < 30:
         return None
     df = m1.copy()
@@ -293,6 +329,14 @@ def add_minute(m1, market):
 
 
 # ---------- 타점 (3분 유지 확인) ----------
+
+def sess_tag(market, ts):
+    """미장 시간외 타점이면 '프리마켓 ' · '애프터마켓 ' (정규장·다른 시장은 빈칸)"""
+    if market != "us":
+        return ""
+    w = us_window(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)
+    return SESS_KO[w[0]] + " " if w and w[0] in SESS_KO else ""
+
 
 def find_trigger(m, side, since, market):
     k, events = CONFIRM_MIN, []
@@ -1073,7 +1117,7 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
     mkt_ok = market_ok(market, daily.get(idx), now) if need_idx else True
     log(f"[{market}] 시장 필터: {'통과' if mkt_ok else '하락장 → 매수 알림 멈춤'}")
     hourly = fetch_many(tickers, "60d", "60m")
-    minute = fetch_many(tickers, "2d", "1m")
+    minute = fetch_many(tickers, "2d", "1m", prepost=(market == "us" and US_EXT))
     paused = False
     if book is not None:
         for t in tickers:
@@ -1097,6 +1141,61 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
         except Exception as e:
             stats["failed"] += 1
             log(f"{t}: 확인 실패 ({e})")
+    try:
+        store_charts(market, tickers, daily, hourly, minute, now, alerts)
+    except Exception as e:
+        log(f"[{market}] 차트 저장 실패 ({e})")
+
+
+def _pack(c, cap):
+    """종가 시리즈 → [[유닉스 초, 가격], ...] (최대 cap개, 마지막 값은 꼭 남김)"""
+    c = c.dropna()
+    if not len(c):
+        return []
+    step = max(1, -(-len(c) // cap))
+    c = c.iloc[::-1].iloc[::step].iloc[::-1]
+    return [[int(ts.timestamp()), float(f"{float(v):.6g}")] for ts, v in c.items()]
+
+
+def chart_series(market, d, h, m):
+    """타점 상세 차트: 분(마지막 거래일 1분봉) · 시(최근 10거래일 1시간봉) · 일(1년) · 월(2년)"""
+    out = {}
+    if m is not None and len(m):
+        c = m["Close"].dropna()
+        if len(c):
+            if market == "crypto":
+                c = c[c.index >= c.index[-1] - pd.Timedelta(hours=24)]
+            else:
+                loc = c.index.tz_convert(TZ[market]) if c.index.tz is not None else c.index
+                c = c[pd.Index(loc.date) == loc[-1].date()]
+            out["m"] = _pack(c, 240)
+    if h is not None and len(h):
+        c = h["Close"].dropna()
+        out["h"] = _pack(c.iloc[-(7 * 24 if market == "crypto" else 70):], 200)
+    if d is not None and len(d):
+        c = d["Close"].dropna()
+        out["d"] = _pack(c.iloc[-260:], 260)
+        try:
+            mo = c.resample("ME").last()
+        except (ValueError, TypeError):
+            mo = c.resample("M").last()
+        out["mo"] = _pack(mo.iloc[-24:], 24)
+    return out
+
+
+def store_charts(market, tickers, daily, hourly, minute, now, alerts):
+    """최근 알림이 나온 종목(이번 실행 포함)만 차트 저장 — 내 보유에만 있는 종목은 안 올림"""
+    if not app_bridge.enabled():
+        return
+    want = (CHART_SET | {a["ticker"] for a in alerts if a.get("app") and a["market"] == market}) - KAKAO_ONLY
+    rows = []
+    for t in tickers:
+        if t not in want:
+            continue
+        data = chart_series(market, daily.get(t), hourly.get(t), minute.get(t))
+        if data:
+            rows.append({"yt": t, "market": market, "data": data, "updated_at": now.isoformat()})
+    app_bridge.upsert("charts", rows, "yt")
 
 
 def sell_linked(state, book, t, now):
@@ -1197,7 +1296,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
                            "grade": stab[0] if stab else None, "score": score, "stab": stab, "hist": hist,
                            "flags": flags,
-                           "why": f"{trig['time'].astimezone(KST):%H:%M} " + trig["reasons"][0]
+                           "why": f"{trig['time'].astimezone(KST):%H:%M} " + sess_tag(market, trig["time"]) + trig["reasons"][0]
                                   + (" 외" if len(trig["reasons"]) > 1 else ""),
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
                                                 hist, stab)})
@@ -1308,6 +1407,11 @@ def main():
     global KAKAO_RULES, MY_HOLD
     force = os.environ.get("FORCE") == "1" or "force" in sys.argv
     KAKAO_RULES = kakao_rules()
+    if app_bridge.enabled():
+        try:
+            CHART_SET.update(app_bridge.recent_alert_yts(datetime.now(timezone.utc) - timedelta(days=3)))
+        except Exception as e:
+            log(f"최근 알림 종목 받기 실패 ({app_bridge.why(e)})")
     if KAKAO_HOLD_ONLY:
         try:
             MY_HOLD = app_bridge.owner_holds()
