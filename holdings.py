@@ -543,6 +543,78 @@ def _old(flag, now, gap):
         return True
 
 
+# ---------- 미장 시간외 가격 (프리·애프터마켓) ----------
+EXT_EVERY = timedelta(minutes=10)
+EXT_MAX = 120                                           # 한 번에 시간외 가격을 받는 미장 종목 수
+
+
+def us_phase(rt, now):
+    """지금 미장 거래 시간대: 'pre' 프리마켓 · 'reg' 정규장 · 'after' 애프터마켓 · 'day' 그 밖(데이마켓·주말) — 미국 동부시간 기준"""
+    s = rt.session("us", now)
+    t = now.astimezone(rt.NY)
+    m = t.hour * 60 + t.minute
+    if not s:
+        return "day"
+    o, c = s
+    if 240 <= m < o:
+        return "pre"
+    if o <= m < c:
+        return "reg"
+    if c <= m < (1200 if c >= 960 else 1020):
+        return "after"
+    return "day"
+
+
+def ext_quote(rt, df, phase, now):
+    """5분봉(시간외 포함) → [가격, 기준 대비 %, 마지막 봉 시각] · 기준: 프리마켓은 전날 정규장 종가, 애프터마켓은 오늘 정규장 종가"""
+    if df is None or not len(df):
+        return None
+    c = df["Close"].dropna()
+    if not len(c):
+        return None
+    idx = c.index.tz_convert(rt.NY) if c.index.tz is not None else c.index.tz_localize("UTC").tz_convert(rt.NY)
+    mins = idx.hour * 60 + idx.minute
+    reg = c[(mins >= 570) & (mins < 960)]
+    today = now.astimezone(rt.NY).date()
+    last_t = idx[-1]
+    if (now - last_t.to_pydatetime()).total_seconds() > 3 * 3600:
+        return None
+    lm = last_t.hour * 60 + last_t.minute
+    if 570 <= lm < 960:                                   # 아직 시간외 거래가 없음
+        return None
+    days = pd.Index(idx.date)
+    if phase == "pre":
+        ref = reg[days[(mins >= 570) & (mins < 960)] < today]
+    else:
+        ref = reg[days[(mins >= 570) & (mins < 960)] == today]
+    if not len(ref):
+        return None
+    p, r = float(c.iloc[-1]), float(ref.iloc[-1])
+    if r <= 0:
+        return None
+    return [round(p, 4), round((p / r - 1) * 100, 2), last_t.isoformat()]
+
+
+def us_ext_job(rt, reqs, now, flags):
+    """프리·애프터마켓 때 10분마다: 앱에서 보유로 넣은 미장 종목의 시간외 가격 → kv 'us_ext' (종목별 [가격, %, 시각])"""
+    phase = us_phase(rt, now)
+    if phase not in ("pre", "after") or not _old(flags.get("us_ext"), now, EXT_EVERY):
+        return None
+    flags["us_ext"] = now.isoformat()
+    us = list(dict.fromkeys(r["yt"] for r in reqs if r.get("market") == "us"))[:EXT_MAX]
+    px = {}
+    for i in range(0, len(us), 40):
+        data = rt.fetch_many(us[i:i + 40], "5d", "5m", prepost=True)
+        for t in us[i:i + 40]:
+            try:
+                q = ext_quote(rt, data.get(t), phase, now)
+            except Exception:
+                q = None
+            if q:
+                px[t] = q
+    ab.put_kv("us_ext", {"at": now.isoformat(), "s": phase, "px": px})
+    return len(px)
+
 def run(rt, book, now):
     """엔진 실행 끝에 호출 → 공개 기록용 짧은 요약 (개수만)"""
     if not ab.enabled():
@@ -555,6 +627,7 @@ def run(rt, book, now):
 
     since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     reqs = _get(f"hold_req?select=yt,market&last_at=gte.{since}&order=last_at.desc&limit={MAX_REQ}")
+    reqs_all = list(reqs)
     fund, nf = {}, 0
     try:                                               # 재무 정보 (투자 원칙 점검표) — 하루 한 번, 실행마다 조금씩
         fund, nf = fund_job(rt, reqs, now)
@@ -587,6 +660,13 @@ def run(rt, book, now):
                     rows.append({"yt": t, "market": market, "data": res, "updated_at": now.isoformat()})
         _upsert("hold_an", rows, "yt")
         notes.append(f"보유 분석 {len(rows)}개" + ("" if full else " (새 종목)"))
+
+    try:
+        n_ext = us_ext_job(rt, reqs_all, now, flags)
+        if n_ext is not None:
+            notes.append(f"미장 시간외 {n_ext}개")
+    except Exception as e:
+        notes.append(f"미장 시간외 실패 ({type(e).__name__})")
 
     k = now.astimezone(rt.KST)
     if flags.get("hold_prob") != k.date().isoformat() and k.hour >= 7:

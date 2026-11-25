@@ -92,6 +92,38 @@ def get_kv(key):
     return rows[0]["value"] if rows else None
 
 
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+MKS = ("kr", "us", "crypto")
+
+
+def owner_holds():
+    """개발자 카톡용: 개발자 화면에서 '이 계정 보유로 카톡 받기'를 누른 계정의 '보유' 종목
+    → {"kr": {야후코드: 이름}, "us": {...}, "crypto": {...}} · 아직 안 정했으면 None
+    (다른 이용자의 보유는 읽지 않음: kv 'kakao_owner'에 적힌 계정 하나만)"""
+    if not enabled():
+        return None
+    o = get_kv("kakao_owner") or {}
+    uid = str(o.get("uid") or "")
+    if not UUID.fullmatch(uid):
+        return None
+    r = _check(requests.get(f"{URL}/rest/v1/user_data", timeout=15, headers=_headers(),
+                            params={"select": "data", "user_id": f"eq.{uid}"}))
+    rows = r.json()
+    hold = ((rows[0].get("data") or {}).get("tn_hold") if rows else None) or []
+    out = {m: {} for m in MKS}
+    for h in hold if isinstance(hold, list) else []:
+        if not isinstance(h, dict):
+            continue
+        m, yt = h.get("market"), str(h.get("yt") or "")
+        try:
+            if float(h.get("qty") or 0) <= 0:          # 수량 없이 넣은 '관심' 종목은 빼고 '보유'만
+                continue
+        except (TypeError, ValueError):
+            continue
+        if m in out and yt and len(yt) <= 20:
+            out[m][yt] = str(h.get("name") or yt)[:40]
+    return out
+
 def count_alerts(market, since):
     """since 이후 그 시장 알림 수 {buy, sell} (요약 카드용, 종목 이름은 안 읽음)"""
     r = _check(requests.get(f"{URL}/rest/v1/alerts", timeout=15, headers=_headers(),

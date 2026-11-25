@@ -323,33 +323,121 @@ def pd_day(ts):
         return None
 
 
+def disp_name(m, t, names, fallback=None):
+    """yt → (코드, 보여 줄 이름)"""
+    nm, al = names.get(t, (None, None))
+    nm = nm or fallback
+    if m == "us":
+        al = al or holdings.ALIAS.get(t)
+        nm = al.split()[0] if al and HANGUL.search(al) else (CORP.sub("", re.split(r"\s+-\s+|\s+Class\s+|\s+Common\s+", nm or t)[0]).strip() or t)
+    code = t.split(".")[0] if m == "kr" else t.replace("-KRW", "")
+    return code, nm or code
+
+
+def hilo(df, market, today):
+    """일봉 → 오늘 1년(약 252거래일) 신고가 'hi' · 신저가 'lo' · 아니면 None → (종류, 오늘 등락 %, 현재가)"""
+    if df is None or not len(df):
+        return None
+    c = df["Close"].dropna()
+    if len(c) < 200 or pd_day(c.index[-1]) != today:
+        return None
+    hi, lo = df["High"].reindex(c.index).fillna(c), df["Low"].reindex(c.index).fillna(c)
+    prev_hi, prev_lo = float(hi.iloc[-253:-1].max()), float(lo.iloc[-253:-1].min())
+    chg = round(float(c.iloc[-1] / c.iloc[-2] - 1) * 100, 2)
+    if float(hi.iloc[-1]) > prev_hi:
+        return "hi", chg, float(c.iloc[-1])
+    if float(lo.iloc[-1]) < prev_lo:
+        return "lo", chg, float(c.iloc[-1])
+    return None
+
+
+HILO_TITLE = {"kr": "국장", "us": "미장", "crypto": "코인"}
+
+
+def hilo_push(rt, book, now, hits):
+    """새로 나온 1년 신고가·신저가 → 시장별 앱 푸시 1건 (아침 7시 전이면 7시에 모아서) · 내 보유 종목은 카톡"""
+    st = book["flags"].setdefault("hilo", {})
+    sent_n = 0
+    for m, items in hits.items():
+        s = st.get(m) or {}
+        day = items[0]["day"] if items else None
+        if not day:
+            continue
+        if s.get("day") != day:
+            s = {"day": day, "push": [], "kakao": []}
+        new = [x for x in items if x.get("pub") and f"{x['yt']}|{x['side']}" not in s["push"]]
+        if new and now.astimezone(rt.KST).hour >= 7:
+            his = [x for x in new if x["side"] == "hi"]
+            los = [x for x in new if x["side"] == "lo"]
+            part = lambda xs, w: (w + ": " + ", ".join(f"{x['name']} {x['chg']:+.1f}%" for x in xs[:3]) + (f" 외 {len(xs) - 3}" if len(xs) > 3 else "")) if xs else ""
+            title = " · ".join(t for t in ((f"📈 1년 신고가 {len(his)}" if his else ""), (f"📉 신저가 {len(los)}" if los else "")) if t) + f" ({HILO_TITLE[m]})"
+            body = " · ".join(t for t in (part(his, "신고가"), part(los, "신저가")) if t)
+            try:
+                sent_n += ab.push_brief({"title": title, "body": body, "url": "./#/", "tag": f"hilo-{m}-{day}"}, now, pref="hilo", market=m)
+            except Exception:
+                pass
+            s["push"] += [f"{x['yt']}|{x['side']}" for x in new]
+        mine = [x for x in items if x.get("mine") and f"{x['yt']}|{x['side']}" not in s["kakao"]]
+        if mine:
+            try:
+                token = rt.base.get_access_token()
+                lines = [("📈 1년 신고가" if x["side"] == "hi" else "📉 1년 신저가") + f" · {x['name']} {x['chg']:+.1f}%" for x in mine[:6]]
+                rt.send_short(token, f"[내 보유 · {HILO_TITLE[m]}]\n" + "\n".join(lines))
+                s["kakao"] += [f"{x['yt']}|{x['side']}" for x in mine]
+            except Exception:
+                pass
+        st[m] = s
+    return sent_n
+
+
 def movers_job(rt, book, now):
     flags = book["flags"]
     if not holdings._old(flags.get("movers"), now, MOVERS_EVERY):
         return None
     flags["movers"] = now.isoformat()
     out = {"at": now.isoformat(), "markets": {}}
+    hl = {"at": now.isoformat(), "markets": {}}
+    hits = {}
+    my = getattr(rt, "MY_HOLD", None) or {}
     for m in ("kr", "us", "crypto"):
         uni = list(dict.fromkeys(MAJOR[m] + [t for cats in (rt.MARKETS.get(m) or {}).values() for t in cats]))
-        data = rt.fetch_many(uni, "1y", "1d")
-        names = _names(rt, uni)
-        rows = []
-        for t in uni:
+        mine = my.get(m) or {}
+        allx = list(dict.fromkeys(uni + list(mine)))
+        data = rt.fetch_many(allx, "1y", "1d")
+        names = _names(rt, allx)
+        today = now.astimezone(rt.TZ[m]).date().isoformat()
+        rows, hrows = [], []
+        for t in allx:
+            df = data.get(t)
+            pub = t in uni
             try:
-                x = mover(data.get(t), m) if data.get(t) is not None else None
+                h = hilo(df, m, today) if df is not None else None
+            except Exception:
+                h = None
+            if h:
+                code, nm = disp_name(m, t, names, mine.get(t))
+                hrows.append({"yt": t, "code": code, "name": nm, "side": h[0], "chg": h[1], "day": today, "pub": pub, "mine": t in mine})
+            if not pub:
+                continue                       # 내 보유에만 있는 종목은 공개 카드(눈에 띄는 종목)에 안 올림
+            try:
+                x = mover(df, m) if df is not None else None
             except Exception:
                 x = None
             if not x or not x["tags"]:
                 continue
-            nm, al = names.get(t, (None, None))
-            if m == "us":
-                al = al or holdings.ALIAS.get(t)
-                nm = al.split()[0] if al and HANGUL.search(al) else (CORP.sub("", re.split(r"\s+-\s+|\s+Class\s+|\s+Common\s+", nm or t)[0]).strip() or t)
-            code = t.split(".")[0] if m == "kr" else t.replace("-KRW", "")
-            rows.append({"yt": t, "code": code, "name": nm or code, **x})
+            code, nm = disp_name(m, t, names)
+            rows.append({"yt": t, "code": code, "name": nm, **x})
         rows.sort(key=lambda r: r["rank"], reverse=True)
         out["markets"][m] = [{k: v for k, v in r.items() if k != "rank"} for r in rows[:6]]
+        hits[m] = hrows
+        pubs = sorted((r for r in hrows if r["pub"]), key=lambda r: -abs(r["chg"]))
+        hl["markets"][m] = {"day": today, "items": [{k: r[k] for k in ("yt", "code", "name", "side", "chg")} for r in pubs[:12]]}
     ab.put_kv("movers", out)
+    ab.put_kv("hilo", hl)
+    try:
+        hilo_push(rt, book, now, hits)
+    except Exception:
+        pass
     return sum(len(v) for v in out["markets"].values())
 
 
