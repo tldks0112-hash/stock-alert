@@ -1,0 +1,51 @@
+name: 엔진 멈춤 경보
+
+on:
+  schedule:
+    - cron: "19,49 * * * *"     # 30분마다 (엔진과 따로 돌아요)
+  workflow_dispatch:             # 지금 바로 한 번 확인해 보기
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 준비
+        run: pip install -q requests
+
+      - name: 엔진 확인
+        env:
+          ALERT_SETTINGS: ${{ secrets.ALERT_SETTINGS }}
+          KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python watchdog.py
+
+      - name: 토큰 저장
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/new_refresh_token
+        run: |
+          if [ -s "$TOKEN_FILE" ]; then
+            gh secret set KAKAO_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"
+            rm -f "$TOKEN_FILE"
+            echo "토큰 저장 완료"
+          fi
+# 끝 (이 줄까지 다 붙여 넣었는지 확인용)
