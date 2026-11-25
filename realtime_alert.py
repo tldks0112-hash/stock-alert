@@ -50,6 +50,10 @@ try:                                   # 의견 답글 메일 (파일이 없어�
     import mailer
 except ImportError:
     mailer = None
+try:                                   # 월가 픽 (미국 기관 13F 공시)
+    import wallst
+except ImportError:
+    wallst = None
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
 # ======================= 설정 =======================
@@ -1375,6 +1379,12 @@ def main():
     except Exception as e:
         log(f"가격 알림 실패 ({app_bridge.why(e)})")
         hold_note += " · 가격 알림 실패"
+    try:                                          # 월가 픽: 30분마다 새 13F 공시 확인
+        if wallst:
+            hold_note += wallst.run(sys.modules[__name__], book, now)
+    except Exception as e:
+        log(f"월가 픽 실패 ({app_bridge.why(e)})")
+        hold_note += " · 월가 픽 실패"
     try:                                          # 의견 답글을 메일로
         if mailer:
             hold_note += mailer.run()
