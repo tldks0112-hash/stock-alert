@@ -913,6 +913,21 @@ def last_change(df):
             "date": pd.Timestamp(c.index[-1]).date().isoformat()}
 
 
+def session_change(df, tz):
+    """1시간봉으로 마지막 거래일 종가 vs 그 전 거래일 종가 (일봉이 늦게 갱신되는 아침 대비)"""
+    if df is None or not len(df):
+        return None
+    c = df["Close"].dropna()
+    if len(c) < 2:
+        return None
+    idx = c.index.tz_convert(tz) if c.index.tz is not None else c.index
+    by_day = pd.Series(c.values, index=[t.date() for t in idx]).groupby(level=0).last()
+    if len(by_day) < 2:
+        return None
+    a, b = float(by_day.iloc[-2]), float(by_day.iloc[-1])
+    return {"chg": round((b / a - 1) * 100, 2), "last": round(b, 2), "date": by_day.index[-1].isoformat()}
+
+
 def morning_brief(book, state, card, now):
     """매일 아침(한국 8시 이후 첫 실행, 일요일 빼고) 한 번: 밤사이 시장 · 시장 흐름 · 지난 24시간 타점과 실전 결과 · 이번 주 실적.
     돌려주는 값: (앱에 보낼 내용, 카톡 줄 목록) 또는 None"""
@@ -925,8 +940,14 @@ def morning_brief(book, state, card, now):
            "closed": {"n": 0, "wins": 0, "sum": 0.0}, "held": 0, "waiting": 0, "earn": []}
     try:
         d = fetch_many([t for _, t in BRIEF_IDX], "10d", "1d")
+        hz = {"^GSPC": "us", "^IXIC": "us", "^KS11": "kr"}
+        hd = fetch_many(list(hz), "7d", "60m")
         for name, t in BRIEF_IDX:
             x = last_change(d.get(t))
+            if t in hz:                                  # 일봉이 하루 늦으면 1시간봉으로 계산한 쪽을 씀
+                y = session_change(hd.get(t), TZ[hz[t]])
+                if y and (not x or y["date"] > x["date"]):
+                    x = y
             if x:
                 out["idx"].append({"name": name, **x})
         h = fetch_many(["BTC-KRW"], "3d", "60m").get("BTC-KRW")
