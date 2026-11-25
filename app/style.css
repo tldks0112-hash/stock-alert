@@ -657,3 +657,18 @@ html.vt-theme::view-transition-new(root) { animation: reveal .55s cubic-bezier(.
 .clegend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .cnote { margin: 6px 0 0; }
 .mine.ext { background: var(--mid-bg); color: var(--mid); }
+
+/* 설명 말풍선 */
+.tipq { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 4px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--card); color: var(--mut); font-size: 11px; font-weight: 700; line-height: 1; vertical-align: 2px; cursor: pointer; }
+.tipbox { position: absolute; z-index: 45; padding: 10px 12px; border-radius: 12px; background: var(--ink); color: var(--on-ink); font-size: 13px; line-height: 1.55; box-shadow: 0 8px 24px rgba(0,0,0,.2); opacity: 0; transform: translateY(4px); transition: opacity .16s, transform .2s var(--ease); }
+.tipbox.in { opacity: 1; transform: none; }
+/* 가격 알림 사용량 */
+.pameter { background: var(--card); border-radius: 16px; padding: 12px 16px; }
+.pmbar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; margin-top: 6px; }
+.pmbar i { display: block; height: 100%; border-radius: 3px; background: #1BA75B; transition: width .4s var(--ease); }
+.pameter.near .pmbar i { background: #E0A100; } .pameter.full .pmbar i { background: var(--red); }
+/* 받을 알림 종류 (접기) */
+details.kinds > summary { padding: 2px 0; }
+details.kinds > summary > span:first-child { display: flex; flex-direction: column; gap: 3px; }
+details.kinds > summary b { font-size: 15px; font-weight: 600; }
+details.kinds .accb { padding-top: 4px; }

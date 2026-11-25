@@ -189,6 +189,11 @@
     if (!CFG.vapidPublicKey) { toast('알림 준비가 아직 안 됐어요. 잠시 뒤 다시 해 주세요'); return; }
     if (isIOS && !standalone) { S.pushHelp = true; render(); return; }
     if (!pushOK) { toast('이 브라우저는 푸시 알림을 지원하지 않아요'); return; }
+    if (Notification.permission === 'default' && !S.pushAsked) {    // 휴대폰 허용 창을 띄우기 전에 무엇을 받는지 먼저 알려 줌
+      sheet({ title: '알림을 켤까요?', body: '고른 시장에 타점이 생기면 바로 알려 드려요. 설정에서 받을 알림 종류와 방해 금지 시간을 언제든 바꿀 수 있어요. 다음 화면에서 휴대폰이 알림 허용을 물어요.', ok: '알림 켜기', no: '나중에' })
+        .then(function (ok) { if (ok) { S.pushAsked = true; enablePush(); } });
+      return;
+    }
     Notification.requestPermission().then(function (perm) {
       if (perm !== 'granted') { toast('알림이 허용되지 않았어요. 휴대폰 설정에서 허용해 주세요'); return; }
       S.busy = true; render();
@@ -420,7 +425,7 @@
     if (!HL || !HL.markets) return '';
     var mk = (prefs().markets || ['kr', 'us', 'crypto']).filter(function (m) { return ((HL.markets[m] || {}).items || []).length; });
     if (!mk.length) return '';
-    return '<div class="hilo"><h3 class="sub-h">1년 신고가 · 신저가</h3>' + mk.map(function (m) {
+    return '<div class="hilo"><h3 class="sub-h">1년 신고가 · 신저가 ' + tipBtn('hilo') + '</h3>' + mk.map(function (m) {
       var G = HL.markets[m], xs = G.items || [];
       var chip = function (x) { return '<button class="hl ' + (x.side === 'hi' ? 'up' : 'dn') + '" data-act="mvpick" data-v="' + esc(x.yt) + '" data-m="' + m + '" data-n="' + esc(x.name) + '" data-c="' + esc(x.code) + '">' +
         '<i>' + (x.side === 'hi' ? '신고가' : '신저가') + '</i><b>' + esc(x.name) + '</b><span class="' + tone(x.chg) + '">' + pct(x.chg) + '</span></button>'; };
@@ -667,6 +672,13 @@
   function paErr(e) {
     var m = (e && e.message) || '';
     toast(/too many/.test(m) ? '가격 알림은 20개까지 걸 수 있어요' : /push off/.test(m) ? '알림을 다시 켠 뒤 걸어 주세요' : '가격 알림을 저장하지 못했어요. 잠시 뒤 다시 해 주세요');
+  }
+  function paMeter() {                    // 가격 알림 사용량 (휴대폰마다 20개까지)
+    var n = paList().filter(function (a) { return !a.fired_at; }).length, max = 20;
+    if (!n) return '';
+    var r = n / max, cls = r >= 1 ? 'full' : r >= 0.8 ? 'near' : '';
+    return '<div class="pameter ' + cls + '"><div class="line"><span class="small">가격 알림</span><b>' + n + ' / ' + max + '개</b></div><div class="pmbar"><i style="width:' + Math.round(r * 100) + '%"></i></div>' +
+      (r >= 0.8 ? '<p class="small" style="margin:4px 0 0">' + (r >= 1 ? '더 걸려면 울린 알림이나 안 쓰는 알림을 지워 주세요.' : '곧 꽉 차요. 안 쓰는 알림은 지워 주세요.') + '</p>' : '') + '</div>';
   }
   function paRows(h, an) {
     var mine = paList().filter(function (a) { return a.yt === h.yt; }), m = h.market, price = an && an.ok ? an.price : null;
@@ -921,7 +933,7 @@
         '<p class="small" style="margin:8px 0 0">고른 지표가 지금과 같았던 날을 과거에서 찾아, 며칠 뒤 실제로 오른 비율을 보여 줘요. 많이 고를수록 비슷한 날이 줄어요.</p>' + chips + '</details></section>';
     return top('<span style="font-size:18px;font-weight:700">내 보유</span>', '<a class="btn small-btn" href="#/hold/add">+ 종목 추가</a>') + demoBar() +
       '<main class="page">' + body +
-      '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
+      paMeter() + '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
   }
   function pageHoldAdd() {
     var s = S.hsel;
@@ -1385,7 +1397,7 @@
           '<div class="wcnt"><span class="red">새로 산 ' + (f.n_new || 0) + '</span><span class="red">늘린 ' + (f.n_add || 0) + '</span><span class="blue">줄인 ' + (f.n_cut || 0) + '</span><span class="blue">다 판 ' + (f.n_exit || 0) + '</span></div></a>';
       }).join('');
     }
-    return top('<span style="font-size:18px;font-weight:700">월가 픽</span>', '<span class="small">SEC 13F 공시</span>') + demoBar() +
+    return top('<span style="font-size:18px;font-weight:700">월가 픽</span>', '<span class="small">SEC 13F 공시 ' + tipBtn('f13') + '</span>') + demoBar() +
       '<main class="page"><p class="info" style="margin:0">미국 큰 기관들이 분기마다 SEC에 내는 보유 공시예요. 새 공시가 올라오면 30분 안에 반영해요.</p>' + body +
       '<p class="foot-note">' + WALL_NOTE + ' 자료: 미국 SEC EDGAR · 종목 코드: OpenFIGI</p></main>' + menu('wall');
   }
@@ -1423,6 +1435,27 @@
     var g = a.grade || '높음';
     return '<span class="chip g-' + g + '">점검 ' + g + (a.total ? ' ' + a.passed + '/' + a.total : '') + '</span>';
   }
+  var TIPS = {
+    grade: '안전 점검: 시장 흐름·종목 추세·눌림·변동성·실적 발표·과거 성적 6가지 중 몇 개를 통과했는지예요. 높음일수록 조건이 좋았다는 뜻이고, 수익을 보장하지 않아요.',
+    score: '신호 강도: 지표 10가지 중 지금 맞는 비율이에요. 70%면 10가지 중 7가지가 맞은 거예요.',
+    hilo: '1년 신고가·신저가: 지난 1년(약 250거래일) 중 가장 높거나 낮은 가격을 오늘 찍은 종목이에요.',
+    f13: '13F: 미국 큰 기관이 분기 말 보유 주식을 45일 안에 SEC에 내는 공시예요. 최대 4달 늦은 정보예요.',
+    ext: '시간외(프리·애프터마켓): 정규장 밖 거래라 거래가 적고 가격이 크게 튈 수 있어요. 지정가로 주문하세요.'
+  };
+  function tipBtn(k) { return '<button type="button" class="tipq" data-tip="' + k + '" aria-label="설명 보기">?</button>'; }
+  function showTip(btn) {
+    closeTip();
+    var t = TIPS[btn.getAttribute('data-tip')]; if (!t) return;
+    var b = document.createElement('div'); b.className = 'tipbox'; b.id = 'tipbox'; b.setAttribute('role', 'tooltip'); b.textContent = t;
+    document.body.appendChild(b);
+    var r = btn.getBoundingClientRect(), w = Math.min(300, window.innerWidth - 24);
+    b.style.width = w + 'px'; b.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + 'px';
+    var below = r.bottom + 8 + b.offsetHeight < window.innerHeight - 140;
+    b.style.top = (below ? r.bottom + 8 : r.top - b.offsetHeight - 8) + window.scrollY + 'px';
+    S.tipY = window.scrollY;
+    requestAnimationFrame(function () { b.classList.add('in'); });
+  }
+  function closeTip() { var b = document.getElementById('tipbox'); if (b) b.remove(); }
   var REASON = [[/VWAP 돌파/, '평균 거래가 위로 올라섬'], [/VWAP 이탈/, '평균 거래가 아래로 내려옴'], [/VWAP 위 유지/, '평균 거래가 위 유지'], [/VWAP 아래 유지/, '평균 거래가 아래 유지'],
     [/단기선 상향/, '단기 평균선 위로'], [/단기선 하향/, '단기 평균선 아래로']];
   function plainReason(r) { REASON.forEach(function (x) { r = r.replace(x[0], x[1]); }); return r; }
@@ -1612,7 +1645,7 @@
     if (!a) return head + '<main class="page"><p class="empty">' + (S.feed ? '이 타점은 3일이 지나 목록에서 빠졌어요.' : '불러오는 중…') + '</p><a class="btn ghost" href="#/">목록으로</a></main>' + menu('home');
     var m = a.market, buy = a.side === 'buy', out = [];
     out.push('<section class="card"><div class="name" style="font-size:12px;font-weight:400;color:var(--mut)"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(where(a)) + '</div>' +
-      '<h1 style="margin:0;font-size:22px">' + esc(a.name) + '</h1><div class="big-price"><strong>' + money(m, a.price) + '</strong><span class="small">알림 때 가격</span></div>' + chartBox(a, ((S.feed && S.feed.alerts) || []).filter(function (x) { return akey(x) === akey(a); })) +
+      (extTag(a) ? '<p class="info" style="margin:0 0 8px">' + extTag(a) + ' 알림이에요 ' + tipBtn('ext') + '</p>' : '') + '<h1 style="margin:0;font-size:22px">' + esc(a.name) + '</h1><div class="big-price"><strong>' + money(m, a.price) + '</strong><span class="small">알림 때 가격</span></div>' + chartBox(a, ((S.feed && S.feed.alerts) || []).filter(function (x) { return akey(x) === akey(a); })) +
       (m === 'kr' ? '<p class="info" style="margin-top:12px">국장 시세는 늦게 들어올 수 있어요. 주문 전에 증권사 앱에서 현재가를 꼭 확인해 주세요.</p>' : '') + '</section>');
     var same = ((S.feed && S.feed.alerts) || []).filter(function (x) { return akey(x) === akey(a); })
       .sort(function (x, y) { return String(y.created_at).localeCompare(String(x.created_at)); });
@@ -1631,10 +1664,10 @@
         '<ol class="steps">' + steps.map(function (s, i) { return '<li><i>' + (i + 1) + '</i><span>' + s + '</span></li>'; }).join('') + '</ol></section>');
       var miss = a.misses || [], passN = (a.total || 0) - miss.filter(function (x) { return x !== '🟢연속손실'; }).length;
       var hist = a.hist ? '<p class="info">과거 ' + (a.hist.src === '시장' ? '같은 시장 알림 전체' : '이 종목 알림') + '대로 샀다면 <b>' + a.hist.n + '번 · 승률 ' + Math.round(a.hist.win) + '% · 평균 ' + (a.hist.avg > 0 ? '+' : '') + Number(a.hist.avg).toFixed(1) + '%</b></p>' : '';
-      out.push('<section class="card"><div class="line"><h2>안전 점검</h2>' + chip(a) + '</div><ul class="checks">' +
+      out.push('<section class="card"><div class="line"><h2>안전 점검 ' + tipBtn('grade') + '</h2>' + chip(a) + '</div><ul class="checks">' +
         miss.map(function (x) { return '<li>' + ICON.no + esc(MISS[x] || x) + '</li>'; }).join('') +
         (passN > 0 ? '<li>' + ICON.ok + (miss.length ? '나머지 ' + passN + '개 통과' : passN + '개 모두 통과') + '</li>' : '') + '</ul>' + hist +
-        '<div class="line"><span>신호 강도 <small class="small">지표 10가지 중 맞은 비율</small></span><b>' + a.score * 10 + '% (' + a.score + '개)</b></div></section>');
+        '<div class="line"><span>신호 강도 ' + tipBtn('score') + '</span><b>' + a.score * 10 + '% (' + a.score + '개)</b></div></section>');
     } else {
       out.push('<section class="card"><h2>보유 중이라면</h2><ol class="steps">' +
         (a.rebound ? '<li><i>1</i><span>지금 팔거나, <b>' + money(m, a.rebound) + '</b>까지 반등하면 팔아요</span></li>' : '<li><i>1</i><span>가까운 반등 자리가 없어요. 보유 중이라면 <b>지금 매도</b>를 참고하세요</span></li>') +
@@ -1775,10 +1808,15 @@
     return top('<h1 style="margin:0;font-size:20px" data-act="devtap">알림 설정</h1>', '', demoBar()) + '<main class="page">' + help + denied +
       '<section class="list">' + sw('push', on, '푸시 알림 받기', S.busy ? '켜는 중…' : (on ? '켜져 있어요' : '타점이 생기면 바로 알려 드려요'), S.busy) +
       sw('mk-kr', mk.indexOf('kr') >= 0, '국장', '평일 09:15 ~ 15:20') + sw('mk-us', mk.indexOf('us') >= 0, '미장', '프리마켓 18:00 ~ 애프터마켓 다음 날 10:00 (한국 시간, 서머타임 1시간 빠름)') +
-      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('sell', p.sell, '매도 알림', '최근 7일 안에 매수 알림이 나간 종목이나 보유 중인 종목만 받아요 · 3일 뒤 실제로 내린 건 절반쯤이에요') +
+      sw('mk-crypto', mk.indexOf('crypto') >= 0, '코인', '24시간') + sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
+      (function () {
+        var kinds = [p.sell, p.brief, mk.indexOf('kr') >= 0 ? p.recap : null, p.wallst, p.hilo !== false].filter(function (v) { return v !== null; }), onN = kinds.filter(Boolean).length;
+        return '<details class="card acc kinds"' + (S.kindsOpen ? ' open' : '') + '><summary data-kinds="1"><span><b>받을 알림 종류</b><small class="small">' + kinds.length + '가지 중 ' + onN + '가지 켬 · 매도 · 브리핑 · 요약 · 월가 픽 · 신고가</small></span><span class="chev" aria-hidden="true"></span></summary><div class="accb list inner">' +
+          sw('sell', p.sell, '매도 알림', '최근 7일 안에 매수 알림이 나간 종목이나 보유 중인 종목만 받아요 · 3일 뒤 실제로 내린 건 절반쯤이에요') +
       (p.sell ? sw('sellAll', p.sellAll, '모든 종목 매도 알림', '다른 종목도 갖고 있다면 켜 주세요 · 알림이 많아져요') : '') +
       sw('brief', p.brief, '아침 브리핑', '매일 아침 8시쯤 밤사이 시장 요약 (일요일 쉼)') +
-      (mk.indexOf('kr') >= 0 ? sw('recap', p.recap, '점심 · 마감 요약', '국장 여는 날 12:30쯤, 15:40쯤 한 줄 요약') : '') + sw('wallst', p.wallst, '월가 픽 새 공시', '미국 큰 기관의 새 보유 공시(13F)가 올라오면 알려 드려요') + sw('hilo', p.hilo !== false, '1년 신고가 · 신저가', '주요 종목이 1년 중 가장 높거나 낮은 가격을 찍으면 시장별로 한 번에 알려 드려요') + sw('quiet', p.quiet, '방해 금지', '밤 12시 ~ 아침 7시는 조용히') + '</section>' +
+      (mk.indexOf('kr') >= 0 ? sw('recap', p.recap, '점심 · 마감 요약', '국장 여는 날 12:30쯤, 15:40쯤 한 줄 요약') : '') + sw('wallst', p.wallst, '월가 픽 새 공시', '미국 큰 기관의 새 보유 공시(13F)가 올라오면 알려 드려요') + sw('hilo', p.hilo !== false, '1년 신고가 · 신저가', '주요 종목이 1년 중 가장 높거나 낮은 가격을 찍으면 시장별로 한 번에 알려 드려요') + '</div></details>';
+      })() +
       accountCard() +
       '<section class="card"><h2 style="font-size:15px">화면 테마</h2><div class="seg seg3" style="margin:10px 0 0">' + [['auto', '자동'], ['light', '밝게'], ['dark', '어둡게']].map(function (q) {
         var on = store.get(K.theme, 'auto') === q[0];
@@ -1957,6 +1995,13 @@
       lastY = y;
     });
   }, { passive: true });
+  document.addEventListener('click', function (e) {        // 설명 말풍선: ? 를 누르면 열고, 다른 곳을 누르면 닫음
+    var q = e.target.closest && e.target.closest('[data-tip]');
+    if (q) { e.preventDefault(); e.stopPropagation(); if (document.getElementById('tipbox')) closeTip(); else showTip(q); return; }
+    closeTip();
+  }, true);
+  window.addEventListener('scroll', function () { if (document.getElementById('tipbox') && Math.abs(window.scrollY - (S.tipY || 0)) > 40) closeTip(); }, { passive: true });
+  window.addEventListener('hashchange', closeTip);
   document.addEventListener('click', function (e) {        // 지금 탭을 한 번 더 누르면 맨 위로
     var a = e.target.closest && e.target.closest('nav.menu .tabs a.on');
     if (!a) return;
@@ -2148,6 +2193,7 @@
     else S.agree[+v] = e.target.checked;
     render();
   });
+  $app.addEventListener('toggle', function (e) { if (e.target.classList && e.target.classList.contains('kinds')) S.kindsOpen = e.target.open; }, true);
   $app.addEventListener('pointermove', chartScrub);
   $app.addEventListener('pointerdown', chartScrub);
   $app.addEventListener('pointerleave', function (e) { var b = e.target.closest && e.target.closest('.chart[data-chart]'); if (b) { var t = b.querySelector('.ctip'), l = b.querySelector('.cscrub'); if (t) t.style.display = 'none'; if (l) l.style.display = 'none'; } }, true);
