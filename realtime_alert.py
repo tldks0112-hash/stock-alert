@@ -40,6 +40,8 @@ import pandas as pd
 import yfinance as yf
 
 import app_bridge
+import holdings
+import news_fut
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
 # ======================= 설정 =======================
@@ -1192,7 +1194,7 @@ def app_item(a):
     title = label(market, a["ticker"], names)
     row = {"market": market, "category": a["category"], "name": title, "side": a["side"],
            "score": int(a["score"]), "reason": a["why"], "price": float(lv["price"]),
-           "flags": a.get("flags")}
+           "flags": a.get("flags"), "yt": a["ticker"]}
     if a["side"] == "buy":
         grade, passed, total, misses = a["stab"]
         qty, loss = position(market, lv["buy"], lv["stop"])
@@ -1278,6 +1280,8 @@ def main():
     if not any(MARKETS.values()):
         sys.exit("❗ 비밀값 ALERT_SETTINGS에 종목이 없어요. 설정 방법을 다시 확인해 주세요.")
     now = datetime.now(timezone.utc)
+    t_start = time.time()
+    scanned = []
     state = load_state()
     card = ensure_card(now)
     book = load_book()
@@ -1291,6 +1295,7 @@ def main():
             continue
         log(f"[{market}] 확인 중...")
         stats["markets"] += 1
+        scanned.append(market)
         scan_market(market, cats, now, force, state, alerts, stats, card, book, notices)
 
     # 주인 없는 오래된 기록 정리 (종목을 설정에서 뺀 경우 등)
@@ -1345,6 +1350,17 @@ def main():
         for a in app_items:                       # 앱에 저장된 것만 '보냄'으로 기록 (실패하면 다음에 다시)
             state[a["akey"]] = now.isoformat()
     save_state(state, now)
+    hold_note = ""
+    try:                                          # 앱 '보유' 탭 분석 (알림을 다 보낸 뒤)
+        hold_note = holdings.run(sys.modules[__name__], book, now)
+    except Exception as e:
+        log(f"보유 분석 실패 ({app_bridge.why(e)})")
+        hold_note = " · 보유 분석 실패"
+    try:                                          # 앱 종목 뉴스 · 지수 선물 시세
+        hold_note += news_fut.run(sys.modules[__name__], book, now)
+    except Exception as e:
+        log(f"뉴스·선물 실패 ({app_bridge.why(e)})")
+        hold_note += " · 뉴스·선물 실패"
     save_book(book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""
@@ -1355,7 +1371,41 @@ def main():
             tail = f" · 앱 {app['saved']}개 · 푸시 {app['pushed']}건" + (f" · 앱 제외 {app['bad']}개" if app.get("bad") else "")
     mode = f" · 카톡 {KAKAO_PRESET}" if KAKAO_RULES else " · 카톡 기존 방식"
     mode += f" · 아침 브리핑 (푸시 {brief_pushed}건)" if brief else ""
+    mode += hold_note
     print(f"확인 끝: 시장 {stats['markets']}곳 · 종목 {stats['checked']}개 · 실패 {stats['failed']}개{tail}{mode}")
+    try:                                          # 개발자 화면용: 엔진 설정 · 최근 실행 기록 (공개 기록에는 안 남김)
+        engine_status(now, t_start, scanned, stats, alerts, app, mode, book, force)
+    except Exception as e:
+        log(f"엔진 상태 저장 실패 ({app_bridge.why(e)})")
+
+
+def engine_status(now, t_start, scanned, stats, alerts, app, mode, book, force):
+    """앱 서버 kv 'engine': 지금 설정 요약 + 최근 실행 48번 (약 4시간). 비밀값은 넣지 않음"""
+    if not app_bridge.enabled():
+        return
+    run = {"at": now.isoformat(), "sec": round(time.time() - t_start, 1), "m": scanned, "c": stats["checked"], "f": stats["failed"],
+           "b": sum(1 for a in alerts if a["side"] == "buy"), "s": sum(1 for a in alerts if a["side"] != "buy"),
+           "k": sum(1 for a in alerts if a.get("kakao")), "p": (app or {}).get("pushed", 0), "e": (app or {}).get("error"),
+           "force": bool(force), "note": mode.strip(" ·")[:300]}
+    try:
+        prev = app_bridge.get_kv("engine") or {}
+    except Exception:
+        prev = {}
+    hist = ([run] + [r for r in (prev.get("runs") or []) if isinstance(r, dict)])[:48]
+    cats = {mk: {c: len(v) for c, v in (cs or {}).items()} for mk, cs in MARKETS.items()}
+    cfg = {
+        "watch": cats, "kakao_preset": KAKAO_PRESET, "kakao_rules": KAKAO_RULES, "kakao_short": KAKAO_SHORT,
+        "budget_krw": BUDGET_KRW, "budget_usd": BUDGET_USD, "max_loss_krw": MAX_LOSS_KRW, "max_loss_usd": MAX_LOSS_USD,
+        "min_score": _SCORE, "min_grade": MIN_GRADE, "confirm_min": CONFIRM_MIN, "min_rr": MIN_RR, "stop_atr": STOP_ATR,
+        "cooldown_min": COOLDOWN_MIN, "sell_all": SELL_ALL, "sell_link_days": SELL_LINK_DAYS, "brief": BRIEF,
+        "trail_atr": TRAIL_ATR, "rebound_atr": REBOUND_ATR, "earn_days": EARN_DAYS, "fee": FEE, "app_floor": APP_FLOOR,
+        "guards": {mk: {g: guard_on(mk, g) for g in GUARD_DEFAULT} for mk in MARKETS},
+        "score_by_market": {mk: min_score(mk) for mk in MARKETS},
+    }
+    live = {"open": len(book.get("open") or []), "closed": len(book.get("closed") or []),
+            "paused": sorted(k.split("|", 1)[1] for k, v in (book.get("flags") or {}).items()
+                             if k.startswith("pause|") and isinstance(v, str) and v > now.isoformat())}
+    app_bridge.put_kv("engine", {"at": now.isoformat(), "cfg": cfg, "live": live, "runs": hist})
 
 
 if __name__ == "__main__":
