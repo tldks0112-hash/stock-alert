@@ -31,7 +31,7 @@ b { font-weight: 700; color: var(--ink); }
 .seg button { min-height: 38px; border: 0; border-radius: 9px; background: transparent; color: var(--mut); font-size: 14px; font-weight: 600; cursor: pointer; }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 
-main.page { flex: 1; padding: 14px 14px calc(96px + var(--safe-b)); display: flex; flex-direction: column; gap: 12px; }
+main.page { flex: 1; padding: 14px 14px calc(136px + var(--safe-b)); display: flex; flex-direction: column; gap: 12px; }
 .row-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px; }
 .row-head h1 { margin: 0; font-size: 17px; font-weight: 700; }
 .row-head h1 span { color: var(--mut); font-weight: 500; }
@@ -109,7 +109,8 @@ ul.checks svg { width: 16px; height: 16px; flex: none; }
 .ok { margin: 0; font-size: 13px; line-height: 1.55; color: var(--hi); background: var(--hi-bg); border-radius: 10px; padding: 10px 12px; }
 
 nav.menu { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--card); border-top: 1px solid var(--line); padding: 6px 8px calc(10px + var(--safe-b)); }
-nav.menu > div { max-width: 520px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+nav.menu > .tabs { max-width: 520px; margin: 0 auto; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+nav.menu > .futwrap { max-width: 520px; margin: 0 auto; }
 nav.menu a { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px; font-size: 11px; color: var(--mut); }
 nav.menu a.on { color: var(--ink); font-weight: 600; }
 nav.menu svg { width: 22px; height: 22px; }
@@ -142,7 +143,7 @@ nav.menu svg { width: 22px; height: 22px; }
 @media (prefers-reduced-motion: reduce) { #splash { transition: none; } }
 
 /* 매수 알림 조건 */
-.grades.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grades.four { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .grades.four button { font-size: 13px; padding: 0 4px; }
 .sub-h { margin: 6px 0 -4px; font-size: 14px; font-weight: 700; color: var(--ink); }
 .sub-h small { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--mut); }
@@ -205,3 +206,173 @@ section.held { box-shadow: inset 0 0 0 2px #1BA75B; }
 .item-link > span:last-child { font-size: 22px; color: var(--faint); }
 .seg.three.rec { margin-bottom: 12px; }
 .quiet-note { margin: 0; } .quiet-note a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+/* 내 보유 */
+.small-btn { min-height: 36px; padding: 0 12px; font-size: 13px; width: auto; }
+.hcard .name { font-size: 16px; color: var(--ink); }
+.prob { display: flex; flex-direction: column; gap: 10px; }
+.pr { display: grid; grid-template-columns: 76px 1fr; grid-template-areas: "d bar" "d nums" "s s"; column-gap: 10px; row-gap: 4px; align-items: center; }
+.pr > span { grid-area: d; font-size: 13px; font-weight: 600; color: var(--sub); }
+.pr > em { grid-column: 2; font-style: normal; }
+.pbar { grid-area: bar; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); }
+.pbar .up { background: var(--red-ink); } .pbar .dn { background: var(--blue-ink); }
+.pr > b { font-size: 13px; } .pr > b.red { grid-area: nums; justify-self: start; } .pr > b.blue { grid-area: nums; justify-self: end; }
+.pr > small { grid-area: s; font-size: 11.5px; color: var(--mut); }
+.ilist { display: flex; flex-direction: column; gap: 6px; }
+.ilist .line > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
+.ilist svg { width: 16px; height: 16px; flex: none; }
+.hbtns { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 6px; }
+.hbtns .btn { min-height: 44px; font-size: 13.5px; padding: 0 8px; }
+.search input { width: 100%; min-height: 48px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 14px; font: inherit; font-size: 16px; color: var(--ink); background: #fff; box-sizing: border-box; }
+.search input:focus { outline: none; border-color: var(--ink); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.hres { display: flex; flex-direction: column; margin-top: 8px; }
+.hres button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 12px 4px; border: 0; border-bottom: 1px solid var(--chip); background: none; font: inherit; cursor: pointer; }
+.hres button b { font-size: 15px; color: var(--ink); } .hres button small { font-size: 12px; color: var(--mut); }
+details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--sub); }
+.jform select { min-height: 48px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 12px; font: inherit; font-size: 16px; background: #fff; }
+nav.menu a { font-size: 11px; }
+
+/* 켜고 끄는 칩 (보유 지표 · 증권사) */
+.picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.picks button { min-height: 36px; padding: 0 12px; border-radius: 18px; border: 1.5px solid var(--line); background: var(--card); color: var(--sub); font-size: 13px; font-weight: 600; cursor: pointer; }
+.picks button.on { border-color: var(--ink); background: var(--ink); color: #fff; }
+.pick-h { font-size: 13px; font-weight: 600; color: var(--sub); margin: 14px 0 0; }
+
+/* 지수 · 야간 선물 (메뉴 위) */
+.futbar { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 4px 6px; margin-bottom: 2px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.futbar .fl { flex: none; font-weight: 700; font-size: 12px; background: var(--chip); border-radius: 6px; padding: 3px 7px; }
+.futbar .fs { flex: 1; min-width: 0; display: flex; gap: 12px; overflow: hidden; white-space: nowrap; }
+.futbar .fi { flex: none; color: var(--sub); }
+.futbar .fi i { font-style: normal; font-weight: 600; }
+.futbar .fa { flex: none; color: var(--mut); font-size: 11px; }
+.futpanel { max-height: 55vh; overflow: auto; padding: 4px 4px 8px; }
+.futpanel .frow { display: grid; grid-template-columns: 1fr 96px auto; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.futpanel .frow small { display: block; font-size: 11.5px; color: var(--mut); margin-top: 2px; }
+.futpanel .fv { text-align: right; }
+.futpanel .fv b { font-size: 15px; }
+.futpanel .small { margin: 8px 0 0; font-size: 11.5px; }
+svg.spark, nav.menu svg.spark { width: 96px; height: 28px; }
+svg.spark polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+svg.spark.red polyline { stroke: var(--red-ink); }
+svg.spark.blue polyline { stroke: var(--blue-ink); }
+/* 종목 뉴스 */
+.news { display: flex; flex-direction: column; }
+.news .nw { display: block; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; }
+.news .nw:last-child { border-bottom: 0; }
+.news .nt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; line-height: 1.45; }
+.news .nm { display: block; margin-top: 3px; font-size: 12px; color: var(--mut); }
+.news .brk { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 5px; background: var(--red-ink); color: #fff; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+/* 지금 상태 게이지 (지난 1년 백분위) */
+.gauges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 2px; }
+.gauge { background: var(--soft); border-radius: 10px; padding: 8px 8px 7px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.gauge span { font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gauge b { font-size: 17px; letter-spacing: -0.3px; }
+.gauge em { font-style: normal; font-size: 11px; color: var(--mut); }
+.gbar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.gbar i { display: block; height: 100%; border-radius: 3px; background: var(--red); }
+.gbar.calm i { background: #1BA75B; }
+.gnote { margin: 4px 0 0; font-size: 11.5px; }
+.ltop { margin-top: 6px; font-size: 13.5px; }
+.ilist2 { display: flex; flex-direction: column; gap: 10px; }
+.irow .ih { display: flex; align-items: flex-start; gap: 6px; }
+.irow .ih > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.irow .ih small { font-size: 11.5px; color: var(--mut); line-height: 1.4; }
+.irow .ih em { font-style: normal; font-weight: 700; font-size: 13.5px; }
+.irow .gbar { margin: 5px 0 0 26px; }
+/* 투자 대가 관점 */
+.legends { display: flex; flex-direction: column; }
+.lgrow { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.lgrow:last-child { border-bottom: 0; }
+.lg { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; min-height: 40px; }
+.lg > span { flex: 1; min-width: 0; }
+.lg small { color: var(--mut); font-size: 12px; }
+.lg em { display: block; font-style: normal; font-size: 12px; color: var(--sub); margin-top: 1px; }
+.lg > b { font-size: 17px; }
+.lgrow .gbar { margin-top: 6px; }
+.lgitems { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lgitems li { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.lgitems li span { flex: 1; }
+.lgitems li small { color: var(--mut); font-size: 12px; }
+.lgitems .na { font-style: normal; display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 10px; background: var(--chip); color: var(--mut); font-size: 12px; font-weight: 700; }
+/* 지표 설정: 켜면/끄면 미리보기 */
+em.wi { display: block; font-style: normal; font-size: 11.5px; color: var(--sub); margin-top: 4px; line-height: 1.5; }
+em.wi b { font-weight: 700; }
+.grades button small.wis { display: block; font-size: 10.5px; font-weight: 500; opacity: .8; margin-top: 1px; }
+/* 공지사항 */
+nav.menu a { position: relative; }
+nav.menu a .dot { position: absolute; top: 4px; right: calc(50% - 16px); width: 7px; height: 7px; border-radius: 4px; background: var(--red); }
+.tag.new { background: var(--red-bg); color: var(--red-ink); }
+.annbar { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 14px; padding: 10px 10px 10px 14px; }
+.annbar a { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; font-size: 14px; }
+.annbar a b { flex: none; font-size: 12px; color: #fff; background: var(--red); border-radius: 6px; padding: 2px 7px; }
+.annbar a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annbar .x { flex: none; border: 0; background: transparent; padding: 6px; cursor: pointer; color: var(--mut); }
+.card.ann ul { margin: 8px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--sub); }
+.irow .ih svg, .lgitems svg { width: 20px; height: 20px; flex: none; margin-top: 1px; }
+.item em.wi b { font-size: inherit; font-weight: 700; }
+/* 보유 카드 · 한눈에 */
+.hhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.hname { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hname .name { font-size: 17px; }
+.hprice { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.hprice b { font-size: 18px; letter-spacing: -0.3px; }
+.hprice span { font-size: 13px; font-weight: 600; }
+.hspark { position: relative; margin: 8px 0 2px; }
+.hspark svg { width: 100%; height: 44px; display: block; }
+.hspark polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.hspark polyline.red { stroke: var(--red); } .hspark polyline.blue { stroke: var(--blue); }
+.hspark span { position: absolute; left: 0; top: -2px; font-size: 11.5px; color: var(--mut); background: rgba(255,255,255,.85); border-radius: 4px; padding: 0 4px 0 0; }
+.hpl { font-size: 14px; }
+.glance { display: grid; grid-template-columns: 132px 1fr; gap: 10px; align-items: center; background: var(--soft); border-radius: 12px; padding: 8px 10px 8px 4px; margin-top: 6px; }
+svg.radar { width: 132px; height: 114px; display: block; }
+svg.radar .rg { fill: none; stroke: #DDE1E6; stroke-width: 1; }
+svg.radar .rv { fill: rgba(139,149,161,.25); stroke: #8B95A1; stroke-width: 1.6; stroke-linejoin: round; }
+svg.radar .rv.good { fill: rgba(217,59,59,.18); stroke: var(--red); }
+svg.radar .rv.mid { fill: rgba(43,108,223,.14); stroke: var(--blue); }
+svg.radar .rv.weak { fill: rgba(139,149,161,.22); stroke: #8B95A1; }
+svg.radar text { font-size: 8.5px; fill: var(--sub); font-weight: 600; }
+svg.radar text.rs { font-size: 17px; font-weight: 800; fill: var(--ink); }
+.gtext { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.gtext > b { font-size: 17px; }
+.gtext p { margin: 2px 0 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.gtext .ltop { font-size: 12px; margin-top: 4px; flex-wrap: wrap; gap: 2px 6px; }
+.pline { font-size: 13.5px; margin-top: 8px; }
+.pline b { text-align: right; }
+.axrows { display: flex; flex-direction: column; gap: 7px; }
+.axrow { display: grid; grid-template-columns: 70px 1fr 52px; align-items: center; gap: 8px; font-size: 13px; }
+.axrow b { text-align: right; font-size: 13px; }
+h2.grp { display: flex; align-items: baseline; gap: 6px; margin: 6px 4px -2px; font-size: 16px; }
+h2.grp span { color: var(--mut); font-size: 14px; }
+h2.grp small { color: var(--mut); font-size: 12px; font-weight: 500; }
+.sumcard .sumrow { display: grid; grid-template-columns: 40px 1fr auto; align-items: baseline; gap: 8px; padding: 4px 0; }
+.sumcard .sumrow span { font-size: 13px; color: var(--sub); }
+.sumcard .sumrow strong { font-size: 20px; letter-spacing: -0.4px; }
+.sumcard .sumrow b { font-size: 14px; }
+summary.dsum { font-size: 15px; font-weight: 700; cursor: pointer; min-height: 28px; list-style-position: inside; }
+summary.dsum small { font-size: 12px; color: var(--mut); font-weight: 500; margin-left: 4px; }
+/* 개발자 통계 */
+.devfp { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; background: var(--soft); border-radius: 10px; padding: 10px 12px; margin: 10px 0; user-select: all; -webkit-user-select: all; }
+.devnums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.devnums > div { background: var(--soft); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+.devnums span { font-size: 12px; color: var(--sub); }
+.devnums b { font-size: 20px; }
+.devnums em { font-style: normal; font-size: 11.5px; color: var(--mut); }
+.drow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.drow:last-child { border-bottom: 0; }
+.drow .rk { width: 22px; text-align: center; font-weight: 700; color: var(--mut); font-size: 13px; }
+.drow .dn { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.drow .dn small { font-size: 11.5px; color: var(--mut); }
+/* 보유 카드 확률 한 줄 */
+.pline b { display: flex; flex-direction: column; align-items: flex-end; }
+.pline b small { font-weight: 500; }
+.flow { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.flow li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; background: var(--soft); border-radius: 10px; padding: 8px 10px; }
+.flow li b { font-size: 13.5px; }
+.flow li span { grid-column: 1; font-size: 12px; color: var(--sub); }
+.flow li .st { grid-column: 2; grid-row: 1 / span 2; font-style: normal; font-size: 11.5px; font-weight: 700; border-radius: 6px; padding: 3px 7px; }
+.st.ok { background: #E6F6EC; color: #0B6E3F; } .st.bad { background: var(--red-bg); color: var(--red-ink); }
+.gline { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.gline > span { width: 64px; flex: none; font-size: 13px; }
+.gchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.gchips i { font-style: normal; font-size: 11.5px; border-radius: 6px; padding: 2px 7px; background: var(--chip); color: var(--mut); text-decoration: line-through; }
+.gchips i.on { background: #E6F6EC; color: #0B6E3F; text-decoration: none; }
