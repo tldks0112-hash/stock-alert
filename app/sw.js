@@ -1,6 +1,6 @@
 // 타점노트 서비스 워커: 휴대폰 푸시 알림을 받아서 보여 주고, 누르면 앱의 그 타점 화면을 열어요.
 // 인터넷이 끊겨도 앱 화면이 열리도록 기본 파일을 저장해 둬요. 인터넷이 되면 항상 새 파일을 먼저 받아요.
-const CACHE = 'tajeom-v2';
+const CACHE = 'tajeom-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'privacy.html'];
 
 self.addEventListener('install', (e) => {
@@ -30,6 +30,7 @@ self.addEventListener('push', (e) => {
   }
   e.waitUntil(self.registration.showNotification(d.title || '타점노트', {
     body: d.body || '새 타점이 있어요',
+    silent: !!d.silent,
     tag: d.tag || undefined,
     icon: 'icon-192.png',
     badge: 'icon-192.png',
