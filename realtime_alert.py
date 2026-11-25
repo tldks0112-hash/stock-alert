@@ -42,6 +42,10 @@ import yfinance as yf
 import app_bridge
 import holdings
 import news_fut
+try:                                   # 가격 알림 파일을 아직 안 올렸어도 엔진은 그대로 돌게
+    import price_watch
+except ImportError:
+    price_watch = None
 import signal_alert as base     # 카톡 보내기 기능을 같이 씀
 
 # ======================= 설정 =======================
@@ -1007,7 +1011,7 @@ def morning_brief(book, state, card, now):
     if "원/달러" in by:
         lines.append(f"환율 {by['원/달러']['last']:,.0f}원 ({by['원/달러']['chg']:+.1f}%)")
     if out["flow"]:
-        lines.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'좋음' if ok else '약함'}" for m, ok in out["flow"].items()))
+        lines.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'상승세' if ok else '약세'}" for m, ok in out["flow"].items()))
     a = out["alerts"]
     lines.append(f"새 타점(24시간) 매수 {a['buy']}·매도 {a['sell']}")
     cl = out["closed"]
@@ -1027,7 +1031,7 @@ def brief_push(data, lines):
     parts = [f"{n} {by[n]['chg']:+.1f}%" for n in ("S&P500", "나스닥", "코스피", "비트코인") if n in by]
     flow = data.get("flow") or {}
     if flow:
-        parts.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'좋음' if ok else '약함'}" for m, ok in flow.items()))
+        parts.append("흐름 " + "·".join(f"{MARKET_KO[m]} {'상승세' if ok else '약세'}" for m, ok in flow.items()))
     a = data["alerts"]
     parts.append(f"새 타점 매수 {a['buy']}·매도 {a['sell']}")
     return {"title": lines[0], "body": " · ".join(parts), "url": "./#/", "tag": "brief-" + data["day"]}
@@ -1361,6 +1365,12 @@ def main():
     except Exception as e:
         log(f"뉴스·선물 실패 ({app_bridge.why(e)})")
         hold_note += " · 뉴스·선물 실패"
+    try:                                          # 사용자가 정한 목표가 · 손절가 알림
+        if price_watch:
+            hold_note += price_watch.run(sys.modules[__name__], now)
+    except Exception as e:
+        log(f"가격 알림 실패 ({app_bridge.why(e)})")
+        hold_note += " · 가격 알림 실패"
     save_book(book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""

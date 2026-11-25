@@ -92,6 +92,45 @@ def get_kv(key):
     return rows[0]["value"] if rows else None
 
 
+def count_alerts(market, since):
+    """since 이후 그 시장 알림 수 {buy, sell} (요약 카드용, 종목 이름은 안 읽음)"""
+    r = _check(requests.get(f"{URL}/rest/v1/alerts", timeout=15, headers=_headers(),
+                            params={"select": "side", "market": f"eq.{market}", "created_at": f"gte.{since.isoformat()}", "limit": "1000"}))
+    out = {"buy": 0, "sell": 0}
+    for x in r.json():
+        if x.get("side") in out:
+            out[x["side"]] += 1
+    return out
+
+
+def get_price_alerts():
+    """아직 안 울린 가격 알림 (목표가·손절가)"""
+    r = _check(requests.get(f"{URL}/rest/v1/price_alerts", timeout=15, headers=_headers(),
+                            params={"select": "id,endpoint,yt,market,name,kind,price,created_at", "fired_at": "is.null", "limit": "5000"}))
+    return r.json()
+
+
+def fire_price_alert(i, price, now):
+    """울렸다고 표시 (아직 안 울린 것만 바꿔서 두 번 울리지 않게) → 바뀌었으면 True"""
+    r = _check(requests.patch(f"{URL}/rest/v1/price_alerts", timeout=15, params={"id": f"eq.{int(i)}", "fired_at": "is.null"},
+                              data=json.dumps({"fired_at": now.isoformat(), "fired_price": price}),
+                              headers=_headers({"Prefer": "return=representation"})))
+    return bool(r.json())
+
+
+def push_one(sub, push, ttl=3600):
+    """휴대폰 한 대에 푸시 → 'ok' / 'gone'(앱을 지웠거나 알림을 끔) / 'fail'"""
+    from pywebpush import WebPushException, webpush
+    try:
+        webpush(subscription_info=sub, data=json.dumps(push, ensure_ascii=False),
+                vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": _subject()}, ttl=ttl, timeout=10)
+        return "ok"
+    except WebPushException as e:
+        return "gone" if getattr(getattr(e, "response", None), "status_code", None) in (404, 410) else "fail"
+    except Exception:
+        return "fail"
+
+
 def get_subs():
     r = _check(requests.get(f"{URL}/rest/v1/subs?select=endpoint,sub,prefs", timeout=15, headers=_headers()))
     return r.json()
@@ -189,8 +228,9 @@ def send_push(subs, items, now):
     return sent, len(gone)
 
 
-def push_brief(push, now):
-    """아침 브리핑 푸시: 알림을 켠 휴대폰 중 브리핑을 끄지 않은 곳만 (방해 금지 시간이면 건너뜀) → 보낸 수"""
+def push_brief(push, now, pref="brief", market=None):
+    """요약 푸시 (아침 브리핑 · 장중/마감 요약): 알림을 켠 휴대폰 중 그 요약을 끄지 않은 곳만 → 보낸 수
+    market을 주면 그 시장을 고른 사람에게만 (밤 7시 전에만 쓰므로 방해 금지와 안 겹침)"""
     if not enabled() or not VAPID_PRIVATE:
         return 0
     from pywebpush import WebPushException, webpush
@@ -198,7 +238,10 @@ def push_brief(push, now):
         return 0
     sent, gone = 0, []
     for s in get_subs():
-        if (s.get("prefs") or {}).get("brief", True) is False:
+        pf = s.get("prefs") or {}
+        if pf.get(pref, True) is False:
+            continue
+        if market and isinstance(pf.get("markets"), list) and market not in pf["markets"]:
             continue
         try:
             webpush(subscription_info=s["sub"], data=json.dumps(push, ensure_ascii=False),

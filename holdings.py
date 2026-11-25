@@ -20,7 +20,7 @@ import app_bridge as ab
 
 H = (1, 5, 20)                                         # 예상 기간 (거래일)
 IND = [("trend", "단기 상승세"), ("mid", "중기 상승세"), ("align", "상승 정렬"), ("mom", "사는 힘 우세"),
-       ("macd", "오름 가속"), ("vol", "거래 활발"), ("mkt", "시장 좋음"), ("calm", "덜 흔들림")]
+       ("macd", "오름 가속"), ("vol", "거래 활발"), ("mkt", "시장 상승세"), ("calm", "덜 흔들림")]
 FUND_EVERY = timedelta(hours=20)                       # 재무 정보 (투자 대가 관점용) 다시 받는 간격
 FUND_PER_RUN = 25                                      # 한 번 실행에 재무 정보를 받는 종목 수
 FUND_KEYS = ("trailingPE", "priceToBook", "returnOnEquity", "debtToEquity", "profitMargins", "earningsGrowth",
@@ -184,7 +184,7 @@ def market_series(rt, market, idx_daily):
 
 
 def market_stats(rt, market, idx_daily):
-    """대표 지수: 200일 평균 대비 위치의 1년 백분위 · 좋음 여부 · 6개월/1년 수익률 (투자 대가 관점용)"""
+    """대표 지수: 200일 평균 대비 위치의 1년 백분위 · 상승 흐름 여부 · 6개월/1년 수익률 (투자 대가 관점용)"""
     if idx_daily is None or len(idx_daily) < 210:
         return None
     c = idx_daily["Close"].dropna()
@@ -265,6 +265,10 @@ def analyze(rt, market, df, mkt, now, mstat=None, fund=None):
                   "calm": (lambda q: None if q is None else 100 - q)(_pctile(v["sd20"])),
                   "mkt": (mstat or {}).get("pct")}
     out["spark"] = [_r(x, 4) for x in c.iloc[-63:].tolist()]           # 최근 3개월 종가 (작은 그래프)
+    if market != "crypto":                             # 실적 발표일 · 배당
+        dr = _f(fund, "dividendRate")
+        out["events"] = {"earn": (fund or {}).get("earn"), "exdiv": (fund or {}).get("exdiv"),
+                         "dy": _r(dr / price * 100, 2) if dr and price > 0 else None}
     out["axes"] = axes(market, out["pct"], fund)
     av = [v for v in out["axes"].values() if v is not None]
     out["score"] = int(round(sum(av) / len(av))) if len(av) >= 3 else None
@@ -382,23 +386,23 @@ def legends(market, d, mstat, fund):
             _ck("현재가가 50일 평균보다 위", None if ma50 is None else p > ma50, gap(p, ma50)),
             _ck("1년 최저가보다 30% 이상 위", p >= lo52 * 1.3, gap(p, lo52)),
             _ck("1년 최고가와 25% 이내", p >= hi52 * 0.75, gap(p, hi52)),
-            _ck("1년 수익률이 시장보다 좋음", _both(r12, ms.get("r12"), lambda a, b: a > b), pc(r12)),
+            _ck("1년 수익률이 시장보다 높음", _both(r12, ms.get("r12"), lambda a, b: a > b), pc(r12)),
         ],
         "livermore": [
             _ck("1년 최고가와 5% 이내 (새 고점 근처)", p >= hi52 * 0.95, gap(p, hi52)),
             _ck("최근 20일 고점을 넘어섬", None if hi20 is None else p >= hi20, gap(p, hi20)),
             _ck("거래량이 평소의 1.3배 이상", None if vr is None else vr >= 1.3, None if vr is None else f"{vr:.1f}배"),
             _ck("큰 흐름이 위로 (50일 평균 > 200일 평균)", _both(ma50, ma200, lambda a, b: a > b)),
-            _ck("시장 분위기 좋음", good),
+            _ck("시장이 상승 흐름", good),
         ],
         "oneil": [
             _ck("C · 최근 분기 이익 25% 이상 증가", None if eq is None else eq >= 0.25, pc(eq)),
             _ck("A · 매출 20% 이상 성장", None if rg is None else rg >= 0.20, pc(rg)),
             _ck("N · 1년 최고가와 15% 이내", p >= hi52 * 0.85, gap(p, hi52)),
             _ck("S · 오른 날 거래량이 내린 날보다 많음 (50일)", None if updn is None else updn >= 1, None if updn is None else f"{updn:.2f}배"),
-            _ck("L · 6개월 수익률이 시장보다 좋음", _both(r6, ms.get("r6"), lambda a, b: a > b), pc(r6)),
+            _ck("L · 6개월 수익률이 시장보다 높음", _both(r6, ms.get("r6"), lambda a, b: a > b), pc(r6)),
             _ck("I · 기관 보유 20% 이상", None if inst is None else inst >= 0.20, pc0(inst)),
-            _ck("M · 시장 분위기 좋음", good),
+            _ck("M · 시장이 상승 흐름", good),
         ],
         "buffett": [
             _ck("ROE 15% 이상 (자기 돈으로 잘 범)", None if roe is None else roe >= 0.15, pc0(roe)),
@@ -473,14 +477,38 @@ def prob_tables(rt, universe, now):
 
 # ---------- 실행 ----------
 
-def fetch_info(rt, t):
-    """야후 파이낸스 재무 요약 → 숫자 항목만"""
+def _epoch_day(x):
+    try:
+        x = float(x)
+        return datetime.fromtimestamp(x, tz=timezone.utc).date().isoformat() if x > 0 else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def fetch_info(rt, t, today=None):
+    """야후 파이낸스 재무 요약 → 숫자 항목 + 다음 실적 발표일(earn) · 배당락일(exdiv)"""
     info = rt.yf.Ticker(t).info or {}
     out = {}
     for k in FUND_KEYS:
         x = info.get(k)
         if isinstance(x, (int, float)) and not isinstance(x, bool) and np.isfinite(x):
             out[k] = float(x)
+    for k in ("earningsTimestampStart", "earningsTimestamp"):
+        d = _epoch_day(info.get(k))
+        if d:
+            out["earn"] = d
+            break
+    ex = _epoch_day(info.get("exDividendDate"))
+    if ex:
+        out["exdiv"] = ex
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    if (not out.get("earn") or out["earn"] < today) and not t.endswith((".KS", ".KQ")) and hasattr(rt, "earnings_dates"):
+        try:                                           # 미장: 실적 일정 표에서 다음 날짜
+            nxt = [d for d in rt.earnings_dates(t) if d >= today]
+            if nxt:
+                out["earn"] = nxt[0]
+        except Exception:
+            pass
     return out
 
 
@@ -494,7 +522,7 @@ def fund_job(rt, reqs, now):
     rows, fails = [], 0
     for t in stale[:FUND_PER_RUN]:
         try:
-            d = fetch_info(rt, t)
+            d = fetch_info(rt, t, now.date().isoformat())
         except Exception:
             fails += 1
             if fails >= 3:                             # 막히면 이번 실행은 그만 (다음 실행에 다시)
