@@ -597,3 +597,63 @@ html.vt-theme::view-transition-new(root) { animation: reveal .55s cubic-bezier(.
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .sk { animation: none; }
 }
+
+/* 개발자: 로그인 계정 */
+.acc { padding: 10px 0; border-top: 1px solid var(--line); }
+.acc:first-of-type { border-top: 0; }
+.accn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.accn b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.pv { font-style: normal; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--chip); color: var(--sub); }
+.pv-kakao { background: #FEE500; color: #191600; }
+.pv-custom-naver { background: #03C75A; color: #fff; }
+.pv-google { background: var(--card); border: 1px solid var(--line); color: var(--ink); }
+.aholds { display: flex; flex-wrap: wrap; gap: 6px; }
+.ahold { font-size: 12.5px; padding: 4px 8px; border-radius: 8px; background: var(--chip); color: var(--sub); }
+.ahold b { color: var(--ink); font-weight: 700; }
+
+/* 같은 종목 알림 묶음 */
+.atimes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.atimes span { font-size: 12px; font-weight: 700; color: var(--sub); margin-right: 2px; }
+.atimes i { font-style: normal; font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--chip); color: var(--sub); font-variant-numeric: tabular-nums; }
+.atimes i.b { background: var(--red-bg); color: var(--red-ink); }
+.atimes i.s { background: var(--blue-bg); color: var(--blue-ink); }
+.tline { position: relative; display: flex; flex-direction: column; }
+.tline::before { content: ''; position: absolute; left: 5px; top: 14px; bottom: 14px; width: 2px; background: var(--line); }
+.tl { position: relative; display: grid; grid-template-columns: 12px auto 1fr auto; align-items: center; gap: 10px; padding: 10px 4px 10px 0; border-radius: 10px; }
+.tl + .tl { border-top: 1px solid var(--line); }
+.tl.on { background: var(--chip); padding-left: 0; }
+.dotl { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--line); background: var(--faint); z-index: 1; }
+.dotl.b { background: var(--red); } .dotl.s { background: var(--blue); }
+.tt { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tr { font-size: 13px; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* 타점 상세 차트 */
+.chead { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 4px; font-variant-numeric: tabular-nums; }
+.chead b { font-size: 16px; }
+.chead span:last-child { font-size: 13px; font-weight: 700; }
+.chart { position: relative; margin: 4px -2px 0; touch-action: pan-y; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .cline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cline.red { stroke: var(--red); } .chart .cline.blue { stroke: var(--blue); }
+.chart .cg0.red { stop-color: var(--red); stop-opacity: .16; } .chart .cg0.blue { stop-color: var(--blue); stop-opacity: .16; }
+.chart .cg1 { stop-color: var(--card); stop-opacity: 0; }
+.chart .lvl { stroke-width: 1; stroke-dasharray: 4 4; }
+.chart .lvl.red { stroke: var(--red); } .chart .lvl.blue { stroke: var(--blue); } .chart .lvl.ink { stroke: var(--ink2); } .chart .lvl.now { stroke: var(--faint); stroke-dasharray: 2 3; }
+.chart .mk { stroke: var(--card); stroke-width: 2; }
+.chart .mk.b { fill: var(--red); } .chart .mk.s { fill: var(--blue); }
+.chart .mk.me { stroke-width: 2.5; filter: drop-shadow(0 0 3px rgba(0,0,0,.25)); }
+.chart .cx text { font-size: 10.5px; fill: var(--mut); font-variant-numeric: tabular-nums; }
+.chart .cscrub { stroke: var(--ink); stroke-width: 1; opacity: .5; }
+.chart .ctip { position: absolute; top: -6px; padding: 4px 8px; border-radius: 8px; background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums; }
+.sk-chart { height: 150px; display: flex; } .sk-chart .sk { flex: 1; height: auto; border-radius: 12px; }
+.seg.four { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0 8px; }
+.seg button[disabled] { opacity: .35; cursor: default; }
+.clegend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; font-size: 12.5px; color: var(--sub); }
+.clegend span { display: inline-flex; align-items: center; gap: 5px; }
+.clegend i { width: 14px; height: 0; border-top: 2px dashed var(--faint); }
+.clegend .red i { border-color: var(--red); } .clegend .blue i { border-color: var(--blue); } .clegend .ink i { border-color: var(--ink2); }
+.clegend .now i { border-top-style: dotted; }
+.clegend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.cnote { margin: 6px 0 0; }
+.mine.ext { background: var(--mid-bg); color: var(--mid); }
