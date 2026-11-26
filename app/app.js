@@ -1929,14 +1929,17 @@
     return new Promise(function (res) {
       var w = document.createElement('div'); w.className = 'sheet-wrap';
       w.innerHTML = '<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shT"><i class="grab" aria-hidden="true"></i><h2 id="shT">' + esc(o.title) + '</h2><p>' + esc(o.body) + '</p>' +
+        (o.input ? '<input class="sheet-in" type="text" autocomplete="nickname" maxlength="' + (o.input.max || 20) + '" placeholder="' + esc(o.input.ph || '') + '" value="' + esc(o.input.value || '') + '" aria-label="' + esc(o.title) + '">' : '') +
         '<div class="two"><button type="button" class="btn ghost" data-v="0">' + esc(o.no || '취소') + '</button><button type="button" class="btn' + (o.danger ? ' danger' : '') + '" data-v="1">' + esc(o.ok || '확인') + '</button></div></div>';
       document.body.appendChild(w);
       requestAnimationFrame(function () { w.classList.add('in'); });
       var key = function (e) { if (e.key === 'Escape') done(false); };
-      var done = function (v) { document.removeEventListener('keydown', key); w.classList.remove('in'); setTimeout(function () { w.remove(); }, 220); res(v); };
+      var inp = w.querySelector('.sheet-in');
+      var done = function (v) { var t = inp ? inp.value.trim() : ''; document.removeEventListener('keydown', key); w.classList.remove('in'); setTimeout(function () { w.remove(); }, 220); res(inp ? (v ? t : false) : v); };
       document.addEventListener('keydown', key);
+      if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); done(true); } });
       w.addEventListener('click', function (e) { var b = e.target.closest('button[data-v]'); if (b) done(b.getAttribute('data-v') === '1'); else if (e.target === w) done(false); });
-      setTimeout(function () { var c = w.querySelector('button[data-v="0"]'); if (c) try { c.focus(); } catch (_) {} }, 60);
+      setTimeout(function () { var c = inp || w.querySelector('button[data-v="0"]'); if (c) try { c.focus(); if (inp) inp.select(); } catch (_) {} }, 60);
     });
   }
   function onboarding() {                // 처음 쓰는 사람: 3장짜리 짧은 안내 (넘기거나 건너뛸 수 있음)
@@ -2106,6 +2109,17 @@
     refresh: function () { if (!S.loading) { toast('새로 불러와요'); loadFeed(); } },
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
     login: function (t) { signIn(t.dataset.v); },
+    setname: function () {
+      var x = session(); if (!x) return;
+      sheet({ title: '이름 정하기', body: '개발자 화면과 이 휴대폰에서 계정 이름으로 보여요. 실명이 아니어도 돼요.', ok: '저장', input: { value: x.user.name || '', ph: '예: 시안', max: 20 } })
+        .then(function (v) {
+          if (v === false) return;
+          var n = cleanName(v);
+          if (!n) { toast('이름을 한 글자 이상 넣어 주세요'); return; }
+          if (n === x.user.name) return;
+          saveName(n).then(function () { toast('이름을 저장했어요'); render(); }).catch(function () { toast('저장하지 못했어요. 잠시 뒤 다시 해 주세요'); });
+        });
+    },
     signout: function () { signOut(false); toast('로그아웃했어요. 이 휴대폰의 기록은 남아 있어요'); },
     syncnow: function () { pushNow().then(function () { toast(S.syncErr ? '저장하지 못했어요' : '계정에 저장했어요'); render(); }); },
     delacct: function () { sheet({ title: '계정을 지울까요?', body: '계정과 서버에 저장된 보유 종목·설정이 바로 지워지고 되돌릴 수 없어요. 이 휴대폰에 있는 기록은 남아요.', ok: '계정 지우기', danger: true }).then(function (ok) { if (ok) deleteAccount(); }); },
@@ -2398,6 +2412,23 @@
     store.set(K.auth, { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: t.expires_at || Math.floor(Date.now() / 1000) + (t.expires_in || 3600),
       user: { id: u.id, provider: (u.app_metadata || {}).provider || '', name: md.name || md.full_name || md.nickname || md.preferred_username || '', email: u.email || '' } });
   }
+  function setLocalName(n) { var a = store.get(K.auth, null); if (a && a.user) { a.user.name = n; store.set(K.auth, a); } }
+  function cleanName(n) { return String(n || '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, 20); }
+  function naverName(pt) {               // 네이버는 로그인만으로 이름이 안 와서, 로그인 직후 네이버에서 별명·이름을 한 번 받아 둠
+    var x = session();
+    if (!x || !pt || x.user.provider !== 'custom:naver') return Promise.resolve('');
+    return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/functions/v1/naver-profile', { method: 'POST',
+      headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + x.access_token, 'Content-Type': 'application/json' }, body: JSON.stringify({ t: pt }) })
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .then(function (j) { var n = cleanName(j && j.name); if (n) setLocalName(n); return n; })
+      .catch(function () { return ''; });
+  }
+  function saveName(n) {                 // 내가 직접 정한 이름 (계정 정보에만 저장)
+    return freshToken().then(function (tok) {
+      if (!tok) throw new Error('signed out');
+      return fetch(authBase() + '/user', { method: 'PUT', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { name: n } }) });
+    }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); setLocalName(n); });
+  }
   function authPost(path, body) {
     return fetch(authBase() + path, { method: 'POST', headers: { apikey: CFG.supabaseKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error_description || j.msg || j.error || ('HTTP ' + r.status)); return j; }); });
@@ -2468,7 +2499,10 @@
     if (!pk || Date.now() - pk.at > 15 * 60000) { setTimeout(function () { toast('로그인 시간이 지났어요. 다시 해 주세요'); }, 600); return; }
     S.authBusy = true;
     authPost('/token?grant_type=pkce', { auth_code: code, code_verifier: pk.v }).then(function (t) {
-      saveSession(t); return pullAndMerge(true);
+      saveSession(t);
+      var x = session();
+      if (x && x.user.provider === 'custom:naver' && t.provider_token) naverName(t.provider_token).then(function (n) { if (n && route().p === 'settings') render(); });
+      return pullAndMerge(true);
     }).then(function () { S.authBusy = false; S.agreedNow = S.agreedNow || store.get(K.consent, false); toast('로그인했어요. 기록이 계정에 저장돼요'); render(); loginLog('login'); })
       .catch(function () { S.authBusy = false; store.del(K.auth); toast('로그인하지 못했어요. 잠시 뒤 다시 해 주세요'); render(); });
   }
@@ -2507,7 +2541,8 @@
     var sy = store.get(K.sync, {}) || {}, pv = { kakao: '카카오', google: 'Google', 'custom:naver': '네이버' }[x.user.provider] || x.user.provider || '';
     var del = '계정과 저장된 기록 지우기';
     return '<section class="card"><h2 style="font-size:15px">내 기록 저장</h2>' +
-      '<div class="line"><span>' + esc(pv) + '로 로그인</span><b>' + esc(x.user.name || x.user.email || '사용자') + '</b></div>' +
+      '<div class="line"><span>' + esc(pv) + '로 로그인</span><b>' + esc(x.user.name || x.user.email || '이름 없음') +
+        ' <button type="button" class="namebtn" data-act="setname">' + (x.user.name ? '바꾸기' : '이름 정하기') + '</button></b></div>' +
       '<div class="line"><span>마지막 저장</span><b>' + (S.syncErr ? '<span class="blue">저장 실패 · 다시 시도해요</span>' : sy.pushed ? since(sy.pushed) : '-') + '</b></div>' +
       '<div class="two" style="margin-top:8px"><button class="btn ghost" data-act="syncnow">지금 저장</button><button class="btn ghost" data-act="signout">로그아웃</button></div>' +
       '<button class="btn ghost" style="margin-top:8px;color:var(--red-ink)" data-act="delacct"' + (S.authBusy ? ' disabled' : '') + '>' + del + '</button>' +
