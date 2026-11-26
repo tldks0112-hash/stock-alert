@@ -721,3 +721,18 @@ ol.isteps li::before { content: counter(s); position: absolute; left: 0; top: 1p
 .bbar .btn { width: auto; min-height: 40px; padding: 0 14px; font-size: 14px; flex: none; }
 .srctag { font-style: normal; font-size: 11px; font-weight: 600; color: var(--blue); }
 .red-ink { color: var(--red-ink); }
+/* 주문 도우미 */
+.osheet { max-height: 88vh; overflow-y: auto; }
+.osheet .ocopy { display: grid; gap: 6px; margin: 0 0 12px; }
+.osheet .ocopy button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 12px; background: var(--bg); padding: 12px 14px; font: inherit; color: var(--ink); cursor: pointer; text-align: left; }
+.osheet .ocopy span { font-size: 14px; color: var(--sub); min-width: 84px; }
+.osheet .ocopy b { flex: 1; font-size: 16px; font-variant-numeric: tabular-nums; }
+.osheet .ocopy b.red { color: var(--red-ink); } .osheet .ocopy b.blue { color: var(--blue-ink); }
+.osheet .ocopy i { font-style: normal; font-size: 12px; font-weight: 700; color: var(--blue); display: inline-flex; align-items: center; gap: 2px; }
+.osheet .ocopy i svg { width: 12px; height: 12px; }
+.osheet .opick { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 12px; scrollbar-width: none; }
+.osheet .opick::-webkit-scrollbar { display: none; }
+.osheet .opick button { flex: none; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.osheet .opick button.on { border-color: var(--ink); background: var(--ink); color: var(--card); }
+.osheet .onote { margin: 8px 0 10px; }
+.osheet > .btn + .onote + .btn.ghost { margin-top: 0; }

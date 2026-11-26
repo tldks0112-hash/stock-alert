@@ -919,7 +919,7 @@
   }
   function hButtons(h, B, open) {
     if (S.hedit === h.id) return hForm(h);
-    return '<div class="hbtns"><button class="btn" data-act="hopenapp" data-v="' + esc(h.id) + '">' + esc(B.name) + '에서 보기</button>' +
+    return '<div class="hbtns"><button class="btn" data-act="horder" data-v="' + esc(h.id) + '">' + esc(B.name) + '에서 주문</button>' +
       '<button class="btn ghost" data-act="hmore" data-v="' + esc(h.id) + '">' + (open ? '분석 접기' : '종목 분석') + '</button>' +
       '<button class="btn ghost" data-act="hedit" data-v="' + esc(h.id) + '">수정</button></div>';
   }
@@ -1023,11 +1023,13 @@
     }, 250);
   }
   function bchip(k, kind) { var on = broker()[kind] === k; return '<button class="' + (on ? 'on' : '') + '" data-act="b' + kind + '" data-v="' + k + '" aria-pressed="' + on + '">' + esc(BROKERS[k].full || BROKERS[k].name) + '</button>'; }
-  function openBroker(h) {
+  function openBroker(h, px) {           // px: [이름, 복사할 값] — 종목 화면으로 바로 가는 곳이면 가격을 복사해 둠
     var B = BROKERS[h.market === 'crypto' ? broker().coin : broker().stock], page = B.url && !h.byName ? B.url(h) : null;
     var copy = h.code, msg = (h.byName ? '종목 이름' : '종목 코드') + '를 복사했어요 (' + copy + '). ' + B.name + ' 검색창에 붙여 넣으세요';
+    if (page && px && px[1] && !B.abroad) { copy = px[1]; msg = px[0] + ' ' + px[1] + ' 복사해 뒀어요. 주문 가격 칸에 붙여 넣으세요'; }
+    else if (page && px) px = null;
     try { if (navigator.clipboard) navigator.clipboard.writeText(copy).catch(function () {}); } catch (_) {}
-    if (page) { window.open(page, '_blank', 'noopener'); return; }          // 종목 화면으로 바로 가는 곳 (토스 국장 · 업비트)
+    if (page) { if (px) toast(msg); window.open(page, '_blank', 'noopener'); return; }   // 종목 화면으로 바로 가는 곳 (토스 국장 · 업비트 · 해외 거래소)
     if (/Android/i.test(navigator.userAgent)) {
       toast(msg);
       var fb = B.q ? 'https://play.google.com/store/search?q=' + encodeURIComponent(B.q) + '&c=apps' : 'https://play.google.com/store/apps/details?id=' + B.pkg;
@@ -1035,6 +1037,54 @@
         ';S.browser_fallback_url=' + encodeURIComponent(fb) + ';end';
     } else if (B.web) { toast(msg); window.open(B.web, '_blank', 'noopener'); }
     else toast(msg);
+  }
+  function josa(w, a, b) { var c = String(w || '').charCodeAt(String(w || '').length - 1); return c >= 0xAC00 && c <= 0xD7A3 && (c - 0xAC00) % 28 ? a : b; }
+  function rawNum(m, v) {                  // 주문 칸에 붙여 넣을 숫자 (쉼표 없이)
+    v = Number(v);
+    if (!isFinite(v) || v <= 0) return '';
+    if (m === 'us') return v.toFixed(2);
+    return v >= 100 ? String(Math.round(v)) : String(+v.toPrecision(6));
+  }
+  function orderSheet(o) {                // 주문 도우미: 값 복사 + 고른 증권사 · 거래소 앱 열기 (주문은 그 앱에서 직접)
+    var kind = o.market === 'crypto' ? 'coin' : 'stock';
+    var apps = kind === 'coin' ? COIN_APPS.concat(COIN_ABROAD) : STOCK_APPS;
+    var rows = (o.rows || []).filter(function (r) { return rawNum(o.market, r[1]); });
+    var w = document.createElement('div'); w.className = 'sheet-wrap';
+    var draw = function () {
+      var B = BROKERS[broker()[kind]], deep = B.url && B.url(o) && !o.byName;
+      w.innerHTML = '<div class="sheet osheet" role="dialog" aria-modal="true" aria-labelledby="oT"><i class="grab" aria-hidden="true"></i>' +
+        '<h2 id="oT">' + esc(o.name) + ' 주문하기</h2><p>주문은 고른 앱에서 직접 해요. 값을 누르면 복사돼요.</p>' +
+        '<div class="ocopy">' + [['종목 코드', o.byName ? o.name : o.code, '']].concat(rows.map(function (r) { return [r[0], rawNum(o.market, r[1]), r[2] || '', r[1]]; })).map(function (r) {
+          return '<button type="button" data-o="copy" data-v="' + esc(r[1]) + '" data-l="' + esc(r[0]) + '"><span>' + esc(r[0]) + '</span><b class="' + r[2] + '">' + esc(r[3] != null ? money(o.market, r[3]) : r[1]) + '</b><i>복사</i></button>'; }).join('') + '</div>' +
+        (kind === 'coin' && B.abroad ? '<p class="small onote">해외 거래소는 USDT(달러) 가격이라 위 원화 가격과 달라요. 비율로 참고하세요.</p>' : '') +
+        '<div class="opick" role="radiogroup" aria-label="' + (kind === 'coin' ? '거래소' : '증권사') + '">' + apps.map(function (k) {
+          var on = broker()[kind] === k; return '<button type="button" data-o="pick" data-v="' + k + '" class="' + (on ? 'on' : '') + '" aria-pressed="' + on + '">' + esc(BROKERS[k].name) + '</button>'; }).join('') + '</div>' +
+        '<button type="button" class="btn" data-o="open">' + esc(B.name) + ' 열기</button>' +
+        '<p class="small onote">' + (deep ? (rows[0] && !B.abroad ? '종목 화면으로 바로 가고, ' + esc(rows[0][0]) + josa(rows[0][0], '을', '를') + ' 복사해 둬요.' : '종목 화면으로 바로 가요.') : '앱이 열리면 복사된 종목 코드를 검색창에 붙여 넣으세요.') + '</p>' +
+        '<button type="button" class="btn ghost" data-o="close">닫기</button></div>';
+    };
+    draw(); document.body.appendChild(w);
+    requestAnimationFrame(function () { w.classList.add('in'); });
+    var key = function (e) { if (e.key === 'Escape') done(); };
+    var done = function () { document.removeEventListener('keydown', key); w.classList.remove('in'); setTimeout(function () { w.remove(); }, 220); };
+    document.addEventListener('keydown', key);
+    w.addEventListener('click', function (e) {
+      if (e.target === w) return done();
+      var b = e.target.closest('[data-o]'); if (!b) return;
+      var a = b.getAttribute('data-o');
+      if (a === 'close') done();
+      else if (a === 'pick') { var x = store.get(K.broker, {}) || {}; x[kind] = b.getAttribute('data-v'); store.set(K.broker, x); draw(); w.querySelector('.sheet').style.transform = 'none'; }
+      else if (a === 'copy') {
+        var v = b.getAttribute('data-v');
+        try { navigator.clipboard.writeText(v).then(function () { copied(b.querySelector('i'), '복사됨'); }, function () { toast('길게 눌러 직접 복사해 주세요'); }); } catch (_) { toast('길게 눌러 직접 복사해 주세요'); }
+      } else if (a === 'open') openBroker(o, rows[0] ? [rows[0][0], rawNum(o.market, rows[0][1])] : null);
+    });
+  }
+  function alertOrder(x) {
+    var code = x.yt ? (x.market === 'kr' ? x.yt.split('.')[0] : x.market === 'crypto' ? x.yt.replace('-KRW', '') : x.yt) : x.name;
+    var rows = x.side === 'buy' ? [['매수 기준가', x.buy, 'red'], ['손절가', x.stop, 'blue'], [x.half ? '1차 매도' : '매도 기준가', x.sell, '']]
+      : [['반등 매도가', x.rebound, 'blue'], ['알림 때 가격', x.price, '']];
+    orderSheet({ name: x.name, market: x.market, code: code, byName: !x.yt, rows: rows });
   }
   function addHolding(s, qty, avg, extra) {
     var list = holds(), same = list.filter(function (h) { return h.yt === s.yt; })[0];
@@ -1736,7 +1786,7 @@
     }
     out.push(holdBox(a));
     var Ba = BROKERS[m === 'crypto' ? broker().coin : broker().stock];
-    out.push('<div class="two"><button class="btn" data-act="aopenapp" data-v="' + esc(a.id) + '">' + esc(Ba.name) + '에서 보기</button><button class="btn ghost" data-act="ashare" data-v="' + esc(a.id) + '">공유하기</button></div>' +
+    out.push('<div class="two"><button class="btn" data-act="aorder" data-v="' + esc(a.id) + '">' + esc(Ba.name) + '에서 주문</button><button class="btn ghost" data-act="ashare" data-v="' + esc(a.id) + '">공유하기</button></div>' +
       '<p class="foot-note">투자 참고용 정보이며 투자자문·매매 권유가 아니에요. 개별 상담과 자금 운용은 하지 않아요. 원금 손실이 생길 수 있고, 과거 성적은 미래 수익을 보장하지 않아요.</p>');
     return head + '<main class="page">' + out.join('') + '</main>' + menu('home');
   }
@@ -2329,6 +2379,17 @@
       } });
     },
     hopenapp: function (t) { var h = holds().filter(function (x) { return x.id === t.dataset.v; })[0]; if (h) openBroker(h); },
+    horder: function (t) {
+      var h = holds().filter(function (x) { return x.id === t.dataset.v; })[0]; if (!h) return;
+      var an = S.han && S.han.data && S.han.data.an && S.han.data.an[h.yt];
+      var rows = [['지금 가격', an && an.ok ? an.price : null, '']].concat(+h.qty > 0 && +h.avg > 0 ? [['내 평균 단가', +h.avg, '']] : []);
+      paList().filter(function (q) { return q.yt === h.yt && !q.fired_at; }).slice(0, 2).forEach(function (q) { var up = q.kind === 'up'; rows.push([up ? '목표 가격' : '손절 가격', +q.price, up ? 'red' : 'blue']); });
+      orderSheet({ name: h.name, market: h.market, code: h.code, rows: rows });
+    },
+    aorder: function (t) {
+      var x = ((S.feed && S.feed.alerts) || []).filter(function (y) { return String(y.id) === t.dataset.v; })[0];
+      if (x) alertOrder(x);
+    },
     bstock: function (t) { var b = store.get(K.broker, {}) || {}; b.stock = t.dataset.v; store.set(K.broker, b); render(); },
     aopenapp: function (t) {
       var x = ((S.feed && S.feed.alerts) || []).filter(function (y) { return String(y.id) === t.dataset.v; })[0];
