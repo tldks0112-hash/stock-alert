@@ -12,7 +12,7 @@
     return LEGAL.advisorNo ? '유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ')로 정식 금융투자업자가 아니에요. 개별 상담과 자금 운용은 하지 않으며, 원금 손실이 생길 수 있어요.'
       : '투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.';
   }
-  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping', onb: 'tn_onboarded' };
+  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping', onb: 'tn_onboarded', nvre: 'tn_naver_reask' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
@@ -177,6 +177,28 @@
   var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
   var pushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  // ---------- 앱 설치 (마켓 없이 홈 화면에 설치) ----------
+  var UA = navigator.userAgent || '', isAndroid = /Android/i.test(UA);
+  var inApp = /KAKAOTALK|NAVER\(inapp|Instagram|FBAN|FBAV|FB_IAB|Line\/|DaumApps|everytimeApp|BAND\//i.test(UA);   // 카톡 같은 앱 안의 브라우저
+  try { if (/^android-app:\/\//.test(document.referrer)) localStorage.setItem('tn_twa', '1'); } catch (_) {}
+  var INSTALLED = standalone || (!inApp && /; wv\)/.test(UA)) || (function () { try { return localStorage.getItem('tn_twa') === '1'; } catch (_) { return false; } })();
+  var BIP = null;                          // 크롬이 주는 '설치' 창
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); BIP = e; var p = route().p; if (p === 'install' || p === 'settings') render(); });
+  window.addEventListener('appinstalled', function () { BIP = null; INSTALLED = true; toast('홈 화면에 타점노트를 설치했어요', { kind: 'ok' }); if (route().p === 'install') location.replace('#/'); else render(); });
+  function shareUrl() { return appUrl() + '?i=1'; }   // 받은 사람은 열자마자 설치 안내 화면
+  function openOutside() {                 // 카톡 같은 앱 안 브라우저 → 크롬 · 사파리로 열기
+    var u = shareUrl();
+    if (/KAKAOTALK/i.test(UA)) { location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(u); return true; }
+    if (isAndroid) { location.href = 'intent://' + u.replace(/^https?:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;end'; return true; }
+    return false;
+  }
+  (function () {                           // ?i=1 로 들어오면 설치 안내로 (카톡 안이면 한 번 바깥 브라우저로)
+    var q = new URLSearchParams(location.search);
+    if (q.get('i') !== '1') return;
+    history.replaceState(null, '', location.pathname + '#/install');
+    var once = false; try { once = sessionStorage.getItem('tn_out') === '1'; sessionStorage.setItem('tn_out', '1'); } catch (_) {}
+    if (inApp && !once && /KAKAOTALK/i.test(UA)) setTimeout(openOutside, 300);
+  })();
   function b64u(s) {
     var p = '='.repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/'));
     var a = new Uint8Array(b.length);
@@ -1502,7 +1524,7 @@
     var all = S.agree.every(Boolean);
     return '<main class="welcome"><div style="display:flex;flex-direction:column;gap:14px"><div class="logo">' + ICON.logo + '</div>' +
       '<h1>매수·매도 타점을<br>알림으로 받아 보세요</h1><p class="lead">국장·미장·코인에 타점이 생기면 매수 기준가, 손절가, 매도가와 안전 점검 결과를 함께 알려 드려요.</p>' +
-      '<span class="tag" style="align-self:flex-start">무료 베타 · 결제 없음</span></div>' +
+      '<span class="tag" style="align-self:flex-start">무료 베타 · 결제 없음</span>' + (INSTALLED ? '' : '<a class="inst-link" href="#/install">휴대폰에 앱으로 설치하기 ›</a>') + '</div>' +
       '<section aria-labelledby="nt" style="display:flex;flex-direction:column;gap:12px"><h2 id="nt" style="margin:0;font-size:16px">시작 전에 꼭 확인해 주세요</h2>' +
       NOTICES.map(function (n, i) {
         return '<label class="agree"><input type="checkbox" data-agree="' + i + '"' + (S.agree[i] ? ' checked' : '') + '><span><strong>' + n[0] + '</strong>' + n[1] + '</span></label>';
@@ -1826,6 +1848,7 @@
       sw('brief', p.brief, '아침 브리핑', '매일 아침 8시쯤 밤사이 시장 요약 (일요일 쉼)') +
       (mk.indexOf('kr') >= 0 ? sw('recap', p.recap, '점심 · 마감 요약', '국장 여는 날 12:30쯤, 15:40쯤 한 줄 요약') : '') + sw('wallst', p.wallst, '월가 픽 새 공시', '미국 큰 기관의 새 보유 공시(13F)가 올라오면 알려 드려요') + sw('hilo', p.hilo !== false, '1년 신고가 · 신저가', '주요 종목이 1년 중 가장 높거나 낮은 가격을 찍으면 시장별로 한 번에 알려 드려요') + '</div></details>';
       })() +
+      shareAppCard() +
       accountCard() +
       '<section class="card"><h2 style="font-size:15px">화면 테마</h2><div class="seg seg3" style="margin:10px 0 0">' + [['auto', '자동'], ['light', '밝게'], ['dark', '어둡게']].map(function (q) {
         var on = store.get(K.theme, 'auto') === q[0];
@@ -1846,6 +1869,40 @@
       '<p class="foot-note">투자 참고용 정보이며 투자자문이 아니에요. ' + whoAmI() + '. 개별 상담과 자금 운용은 하지 않아요.</p></main>' + menu('settings');
   }
 
+  function pageInstall() {
+    var steps = function (xs) { return '<ol class="isteps">' + xs.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ol>'; }, body;
+    if (inApp) {
+      body = '<p class="warn">' + (/KAKAOTALK/i.test(UA) ? '카카오톡' : '앱') + ' 안에서 열린 화면이라 여기서는 설치가 안 돼요. ' + (isIOS ? '사파리로' : '크롬으로') + ' 열어 주세요.</p>' +
+        (isIOS && !/KAKAOTALK/i.test(UA) ? '' : '<button class="btn" data-act="iout">' + (isIOS ? '사파리로 열기' : '크롬으로 열기') + '</button>') +
+        '<p class="small" style="margin:12px 0 6px">버튼이 안 되면 직접 열어 주세요</p>' +
+        steps(isIOS ? ['오른쪽 아래 <b>⋯</b> 또는 공유 버튼을 눌러요', '<b>Safari로 열기</b> (또는 기본 브라우저로 열기)를 눌러요'] : ['오른쪽 위 <b>⋮</b> 를 눌러요', '<b>다른 브라우저로 열기</b>를 눌러요']) +
+        '<button class="btn ghost" data-act="lcopy" style="margin-top:6px">링크 복사하기</button>';
+    } else if (BIP) {
+      body = '<button class="btn big" data-act="iinstall">홈 화면에 설치하기</button><p class="small" style="margin:10px 0 0;text-align:center">버튼을 누르고 <b>설치</b>를 한 번 더 누르면 끝나요</p>';
+    } else if (isIOS) {
+      body = steps(['화면 아래(또는 위)의 <b>공유 버튼</b> <span class="ishare" aria-hidden="true">□↑</span> 을 눌러요', '목록을 올려 <b>홈 화면에 추가</b>를 눌러요', '오른쪽 위 <b>추가</b>를 누르면 끝나요']) +
+        '<p class="small" style="margin:0">아이폰은 Safari에서 하는 게 가장 확실해요. 홈 화면에 추가해야 알림도 받을 수 있어요.</p>';
+    } else if (isAndroid) {
+      body = steps(['오른쪽 위 <b>⋮</b> 를 눌러요', '<b>앱 설치</b> 또는 <b>홈 화면에 추가</b>를 눌러요', '<b>설치</b>를 누르면 끝나요']) +
+        '<p class="small" style="margin:0">삼성 인터넷은 아래 <b>≡</b> → <b>현재 페이지 추가</b> → <b>홈 화면</b>이에요. 메뉴에 설치가 안 보이면 크롬으로 열어 주세요.</p>';
+    } else {
+      body = '<p class="small" style="margin:0 0 12px">휴대폰에서 이 링크를 열면 바로 설치할 수 있어요. 카카오톡 \'나와의 채팅\'으로 보내 두면 편해요.</p>' +
+        '<div class="two"><button class="btn" data-act="lshare">링크 보내기</button><button class="btn ghost" data-act="lcopy">링크 복사</button></div>';
+    }
+    return top('<span style="display:flex;align-items:center;gap:2px"><a class="icon-btn" href="#/" aria-label="뒤로">' + ICON.back + '</a><span style="font-size:16px;font-weight:700">휴대폰에 설치</span></span>') +
+      '<main class="page install"><section class="card ihero"><div class="logo">' + ICON.logo + '</div><h1>타점노트를<br>휴대폰에 설치하세요</h1>' +
+      '<p class="lead">앱 마켓 없이 바로 홈 화면에 설치돼요. 1분이면 끝나고, 무료 베타예요.</p></section>' +
+      '<section class="card">' + body + '</section>' +
+      '<section class="card"><h2 style="font-size:15px">설치한 뒤에는</h2>' + steps(['홈 화면의 <b>타점노트</b> 아이콘으로 열어요', '안내를 읽고 동의하면 바로 시작돼요', '<b>설정</b>에서 푸시 알림을 켜면 타점이 생길 때 알려 드려요']) + '</section>' +
+      '<p class="foot-note">국장·미장·코인 매수·매도 타점을 알려 주는 참고용 정보예요 (투자자문 아님).</p></main>';
+  }
+  function shareAppCard() {
+    return '<section class="card shareapp"><h2 style="font-size:15px">타점노트 같이 쓰기</h2>' +
+      '<p class="small" style="margin:4px 0 10px">링크를 받은 사람은 열자마자 설치 안내가 나와요. 앱 마켓 없이 바로 홈 화면에 설치돼요.</p>' +
+      '<div class="linkbox"><span>' + esc(shareUrl().replace(/^https?:\/\//, '').replace(/\?i=1$/, '')) + '</span><button type="button" class="namebtn" data-act="lcopy">복사</button></div>' +
+      '<div class="two" style="margin-top:10px"><button class="btn" data-act="lshare">링크 보내기</button>' +
+      (INSTALLED ? '<span class="btn ghost done" aria-disabled="true">' + ICON.chk + ' 설치돼 있어요</span>' : '<a class="btn ghost" href="#/install">이 휴대폰에 설치</a>') + '</div></section>';
+  }
   function pageGuide() {
     var gi = 0, sec = function (t, body) { return '<details class="card guide acc"' + (gi++ === 0 ? ' open' : '') + '><summary><h2>' + t + '</h2><span class="chev" aria-hidden="true"></span></summary><div class="accb">' + body + '</div></details>'; };
     var li = function (xs) { return '<ul>' + xs.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>'; };
@@ -1869,7 +1926,9 @@
   function route() { var p = location.hash.replace(/^#\/?/, '').split('/'); return { p: p[0] || 'home', id: p[1] }; }
   function render() {
     var r = route(), html;
-    if (!S.agreedNow) html = pageWelcome();
+    if (r.p === 'install' && INSTALLED) { location.replace('#/'); return; }
+    if (r.p === 'install') html = pageInstall();
+    else if (!S.agreedNow) html = pageWelcome();
     else if (LIVE && !code()) {
       if (S.open === false) html = pageCode();
       else { html = pageWait(); if (S.open === null) setTimeout(checkOpen, 0); }
@@ -2109,6 +2168,24 @@
     refresh: function () { if (!S.loading) { toast('새로 불러와요'); loadFeed(); } },
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
     login: function (t) { signIn(t.dataset.v); },
+    lshare: function (t) {
+      var u = shareUrl(), txt = '타점노트 · 국장·미장·코인 매수·매도 타점 알림 (무료 베타)\n링크를 열면 바로 휴대폰에 설치할 수 있어요.';
+      var copyIt = function () {
+        try { navigator.clipboard.writeText(txt + '\n' + u).then(function () { copied(t, '복사했어요'); toast('링크를 복사했어요. 카톡에 붙여 넣어 보내 주세요', { kind: 'ok' }); }, function () { toast('길게 눌러 직접 복사해 주세요'); }); } catch (_) { toast('길게 눌러 직접 복사해 주세요'); }
+      };
+      if (navigator.share) navigator.share({ title: '타점노트', text: txt, url: u }).catch(function (e) { if (!e || e.name !== 'AbortError') copyIt(); });
+      else copyIt();
+    },
+    lcopy: function (t) {
+      try { navigator.clipboard.writeText(shareUrl()).then(function () { copied(t, '복사했어요'); toast('링크를 복사했어요', { kind: 'ok' }); }, function () { toast('길게 눌러 직접 복사해 주세요'); }); } catch (_) { toast('길게 눌러 직접 복사해 주세요'); }
+    },
+    iout: function () { if (!openOutside()) toast(isIOS ? '오른쪽 아래 ⋯ → Safari로 열기를 눌러 주세요' : '오른쪽 위 ⋮ → 다른 브라우저로 열기를 눌러 주세요'); },
+    iinstall: function () {
+      if (!BIP) { render(); return; }
+      var e = BIP; BIP = null;
+      e.prompt();
+      (e.userChoice || Promise.resolve({})).then(function (c) { if (c && c.outcome === 'dismissed') toast('나중에 설정 → 이 휴대폰에 설치에서 다시 할 수 있어요'); render(); });
+    },
     setname: function () {
       var x = session(); if (!x) return;
       sheet({ title: '이름 정하기', body: '개발자 화면과 이 휴대폰에서 계정 이름으로 보여요. 실명이 아니어도 돼요.', ok: '저장', input: { value: x.user.name || '', ph: '예: 시안', max: 20 } })
@@ -2117,7 +2194,7 @@
           var n = cleanName(v);
           if (!n) { toast('이름을 한 글자 이상 넣어 주세요'); return; }
           if (n === x.user.name) return;
-          saveName(n).then(function () { toast('이름을 저장했어요'); render(); }).catch(function () { toast('저장하지 못했어요. 잠시 뒤 다시 해 주세요'); });
+          saveName(n).then(function () { store.del(K.nvre); toast('이름을 저장했어요'); render(); }).catch(function () { toast('저장하지 못했어요. 잠시 뒤 다시 해 주세요'); });
         });
     },
     signout: function () { signOut(false); toast('로그아웃했어요. 이 휴대폰의 기록은 남아 있어요'); },
@@ -2403,6 +2480,7 @@
     crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function (h) {
       store.set(K.pkce, { v: verifier, p: key, at: Date.now(), back: location.hash || '#/settings' });
       var q = new URLSearchParams({ provider: pv.id, redirect_to: location.origin + location.pathname, code_challenge: b64url(h), code_challenge_method: 's256' });
+      if (key === 'naver' && store.get(K.nvre, false)) { q.set('auth_type', 'reprompt'); store.del(K.nvre); }   // 별명 제공에 다시 동의받기
       location.href = authBase() + '/authorize?' + q.toString();
     });
   }
@@ -2420,7 +2498,7 @@
     return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/functions/v1/naver-profile', { method: 'POST',
       headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + x.access_token, 'Content-Type': 'application/json' }, body: JSON.stringify({ t: pt }) })
       .then(function (r) { return r.ok ? r.json() : {}; })
-      .then(function (j) { var n = cleanName(j && j.name); if (n) setLocalName(n); return n; })
+      .then(function (j) { var n = cleanName(j && j.name); if (n) { setLocalName(n); store.del(K.nvre); } else if (j && j.why === 'no_profile') store.set(K.nvre, true); return n; })
       .catch(function () { return ''; });
   }
   function saveName(n) {                 // 내가 직접 정한 이름 (계정 정보에만 저장)
@@ -2446,7 +2524,10 @@
       var h = { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' };
       for (var k in (extra || {})) h[k] = extra[k];
       return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/' + path, { method: method, headers: h, body: body == null ? undefined : JSON.stringify(body) })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 || r.status === 201 && method === 'POST' ? null : r.json(); });
+        .then(function (r) {                // 저장은 내용 없이 200/201/204로 올 수 있음 → 빈 응답도 성공
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text().then(function (t) { if (!t) return null; try { return JSON.parse(t); } catch (_) { return null; } });
+        });
     });
   }
   function localBlob() { var d = {}; SYNC_KEYS.forEach(function (k) { var v = store.get(k, undefined); if (v !== undefined) d[k] = v; }); return d; }
@@ -2501,7 +2582,12 @@
     authPost('/token?grant_type=pkce', { auth_code: code, code_verifier: pk.v }).then(function (t) {
       saveSession(t);
       var x = session();
-      if (x && x.user.provider === 'custom:naver' && t.provider_token) naverName(t.provider_token).then(function (n) { if (n && route().p === 'settings') render(); });
+      if (x && x.user.provider === 'custom:naver' && !x.user.name && t.provider_token) naverName(t.provider_token).then(function (n) {
+        if (n) { if (route().p === 'settings') render(); return; }
+        if (store.get(K.nvre, false)) setTimeout(function () {     // 예전에 별명 없이 동의한 경우: 바로 다시 동의받기
+          toast('네이버에서 별명을 받지 못했어요', { action: '다시 동의', onAction: function () { signIn('naver'); } });
+        }, 900);
+      });
       return pullAndMerge(true);
     }).then(function () { S.authBusy = false; S.agreedNow = S.agreedNow || store.get(K.consent, false); toast('로그인했어요. 기록이 계정에 저장돼요'); render(); loginLog('login'); })
       .catch(function () { S.authBusy = false; store.del(K.auth); toast('로그인하지 못했어요. 잠시 뒤 다시 해 주세요'); render(); });
