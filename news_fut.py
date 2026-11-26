@@ -868,6 +868,15 @@ def run(rt, book, now):
         return ""
     notes = []
     try:
+        import broker_sync                      # 토스증권 보유 → 앱 보유 (비밀값이 없으면 아무것도 안 함)
+        bs = broker_sync.run(book, now)
+        if bs:
+            notes.append(bs)
+    except ImportError:
+        pass
+    except Exception as e:
+        notes.append(f"증권사 보유 반영 실패 ({type(e).__name__})")
+    try:
         f = futures(rt, now)
         ab.put_kv("futures", f)
         notes.append(f"선물 {len(f['items'])}개")
