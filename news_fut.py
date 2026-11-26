@@ -522,6 +522,81 @@ def recap_job(rt, book, now):
 
 # ---------- 실행 ----------
 
+# ---------- 내 보유 마감 요약 (개발자 카톡: 국장 15:40쯤 · 미장 마감 뒤) ----------
+
+def _won(v, usd=False):
+    v = float(v)
+    return (("+" if v > 0 else "-" if v < 0 else "") + ("$" + f"{abs(v):,.2f}" if usd else f"{abs(v):,.0f}원"))
+
+
+def mine_lines(rt, pos, cur):
+    """보유 종목들 → (오늘 손익 줄, 오른·내린 종목 줄) — cur: 'usd' 또는 'krw'"""
+    if not pos:
+        return None
+    by = {}
+    kr_us = [p["yt"] for p in pos if p["market"] in ("kr", "us")]
+    coins = [p["yt"] for p in pos if p["market"] == "crypto"]
+    d = rt.fetch_many(kr_us, "5d", "1d") if kr_us else {}
+    h = rt.fetch_many(coins, "3d", "60m") if coins else {}
+    val = day = cost = 0.0
+    moves = []
+    for p in pos:
+        df = (h if p["market"] == "crypto" else d).get(p["yt"])
+        if df is None or not len(df):
+            continue
+        c = df["Close"].dropna()
+        if len(c) < 2:
+            continue
+        last = float(c.iloc[-1])
+        prev = float(c.iloc[-25] if p["market"] == "crypto" and len(c) >= 25 else c.iloc[-2])
+        chg = (last / prev - 1) * 100 if prev else 0.0
+        val += last * p["qty"]
+        day += (last - prev) * p["qty"]
+        cost += p["avg"] * p["qty"] if p["avg"] > 0 else last * p["qty"]
+        moves.append((chg, p["name"]))
+    if not moves:
+        return None
+    usd = cur == "usd"
+    base = val - day
+    head = f"오늘 {_won(day, usd)} ({(day / base * 100 if base else 0):+.1f}%) · 평가 {_won(val, usd).lstrip('+')}"
+    if cost and abs(cost - val) > 1e-9:
+        head += f" · 누적 {((val / cost - 1) * 100):+.1f}%"
+    moves.sort(reverse=True)
+    tail = f"▲ {moves[0][1]} {moves[0][0]:+.1f}%"
+    if len(moves) > 1 and moves[-1][0] < moves[0][0]:
+        tail += f" ▼ {moves[-1][1]} {moves[-1][0]:+.1f}%"
+    return head, tail
+
+
+def mine_close_job(rt, book, now):
+    """시안님 보유(개발자 화면에서 연결한 계정) 마감 요약 → 카톡 한 번 (국장 날 15:40~17:30 · 미장 마감 5분~2시간 뒤)"""
+    pos = list(getattr(ab, "OWNER_POS", []) or [])
+    if not pos or getattr(rt, "MY_HOLD", None) is None:
+        return None
+    flags, sent = book["flags"], []
+    k = now.astimezone(rt.KST)
+    jobs = []
+    if rt.session("kr", now) and 15 * 60 + 40 <= k.hour * 60 + k.minute < 17 * 60 + 30:
+        jobs.append(("kr", k.date().isoformat(), "국장", [p for p in pos if p["market"] in ("kr", "crypto")], "krw"))
+    s = rt.session("us", now)
+    e = now.astimezone(rt.NY)
+    if s and s[1] + 5 <= e.hour * 60 + e.minute < s[1] + 120:
+        jobs.append(("us", e.date().isoformat(), "미장", [p for p in pos if p["market"] == "us"], "usd"))
+    for key, day, label, ps, cur in jobs:
+        if flags.get("mine_close|" + key) == day or not ps:
+            continue
+        flags["mine_close|" + key] = day
+        try:
+            got = mine_lines(rt, ps, cur)
+            if not got:
+                continue
+            msg = f"📊 내 보유 마감 · {label}\n{got[0]}\n{got[1]}"
+            rt.send_short(rt.base.get_access_token(), msg[:200])
+            sent.append(label)
+        except Exception:
+            pass
+    return sent
+
 def run(rt, book, now):
     """엔진 실행 끝에 호출 → 공개 기록용 짧은 요약 (개수만)"""
     if not ab.enabled():
@@ -539,6 +614,12 @@ def run(rt, book, now):
             notes.append(f"눈에 띄는 종목 {mv}개")
     except Exception as e:
         notes.append(f"눈에 띄는 종목 실패 ({type(e).__name__})")
+    try:
+        mc = mine_close_job(rt, book, now)
+        if mc:
+            notes.append("보유 마감 요약 카톡 " + "·".join(mc))
+    except Exception as e:
+        notes.append(f"보유 마감 요약 실패 ({type(e).__name__})")
     try:
         rc = recap_job(rt, book, now)
         if rc:

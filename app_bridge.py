@@ -92,11 +92,26 @@ def upsert(table, rows, on):
                          headers=_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})))
 
 
+def recent_alerts(since):
+    """since 이후 앱 알림 (차트·알림 결과 갱신용): id · 종목 · 매수/매도 · 알림 때 가격 · 시각"""
+    r = _check(requests.get(f"{URL}/rest/v1/alerts", timeout=15, headers=_headers(),
+                            params={"select": "id,yt,market,side,price,created_at", "created_at": f"gte.{since.isoformat()}",
+                                    "order": "created_at.desc", "limit": "1000"}))
+    return [x for x in r.json() if x.get("yt")]
+
+
 def recent_alert_yts(since):
     """since 이후 앱 알림이 나온 종목 코드들 (차트 갱신 대상)"""
-    r = _check(requests.get(f"{URL}/rest/v1/alerts", timeout=15, headers=_headers(),
-                            params={"select": "yt", "created_at": f"gte.{since.isoformat()}", "limit": "1000"}))
-    return {x.get("yt") for x in r.json() if x.get("yt")}
+    return {x["yt"] for x in recent_alerts(since)}
+
+
+def rpc(fn, args):
+    """서버 함수 호출 (엔진 전용 함수는 비밀 키로만 됨)"""
+    r = _check(requests.post(f"{URL}/rest/v1/rpc/{fn}", timeout=20, data=json.dumps(args, ensure_ascii=False), headers=_headers()))
+    try:
+        return r.json()
+    except ValueError:
+        return None
 
 def get_kv(key):
     """앱 서버에 저장된 값 하나 (없으면 None)"""
@@ -108,6 +123,7 @@ def get_kv(key):
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 MKS = ("kr", "us", "crypto")
+OWNER_POS = []                                   # owner_holds()가 채움: [{yt, name, market, qty, avg}] (마감 요약용)
 
 
 def owner_holds():
@@ -125,17 +141,20 @@ def owner_holds():
     rows = r.json()
     hold = ((rows[0].get("data") or {}).get("tn_hold") if rows else None) or []
     out = {m: {} for m in MKS}
+    OWNER_POS.clear()
     for h in hold if isinstance(hold, list) else []:
         if not isinstance(h, dict):
             continue
         m, yt = h.get("market"), str(h.get("yt") or "")
         try:
-            if float(h.get("qty") or 0) <= 0:          # 수량 없이 넣은 '관심' 종목은 빼고 '보유'만
-                continue
+            qty, avg = float(h.get("qty") or 0), float(h.get("avg") or 0)
         except (TypeError, ValueError):
+            continue
+        if qty <= 0:                                   # 수량 없이 넣은 '관심' 종목은 빼고 '보유'만
             continue
         if m in out and yt and len(yt) <= 20:
             out[m][yt] = str(h.get("name") or yt)[:40]
+            OWNER_POS.append({"yt": yt, "name": out[m][yt], "market": m, "qty": qty, "avg": avg})
     return out
 
 def count_alerts(market, since):

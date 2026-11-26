@@ -95,6 +95,7 @@ KAKAO_HOLD_ONLY = bool(S.get("카톡_보유만", True))  # True: 카톡은 내�
 MY_HOLD = None                                  # 실행할 때 앱 서버에서 받아 옴: {시장: {종목: 이름}} (개발자 화면에서 정한 계정 하나)
 KAKAO_ONLY = set()                              # 감시 목록에 없고 내 보유에만 있는 종목 → 카톡만 (앱 피드엔 안 올림)
 CHART_SET = set()                               # 최근 3일 안에 앱 알림이 나온 종목 → 타점 상세 화면 차트(분·시·일·월)를 저장
+RECENT = []                                      # 최근 3일 앱 알림 (알림 뒤 최고·최저·지금 계산용)
 APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
@@ -1196,6 +1197,39 @@ def store_charts(market, tickers, daily, hourly, minute, now, alerts):
         if data:
             rows.append({"yt": t, "market": market, "data": data, "updated_at": now.isoformat()})
     app_bridge.upsert("charts", rows, "yt")
+    res = []
+    for x in RECENT:
+        t = x["yt"]
+        if x.get("market") != market or t not in tickers or t in KAKAO_ONLY:
+            continue
+        r = alert_result(x, minute.get(t), hourly.get(t))
+        if r:
+            res.append({"id": x["id"], "res": {**r, "at": now.isoformat()}})
+    if res:
+        app_bridge.rpc("engine_alert_res", {"p": res})
+
+
+def alert_result(x, m, h):
+    """알림 뒤 최고·최저·지금 (알림 때 가격 대비 %) — 1분봉에 알림 시각이 있으면 1분봉, 없으면 1시간봉으로"""
+    try:
+        t0 = pd.Timestamp(x["created_at"])
+        price = float(x["price"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    for df in (m, h):
+        if df is None or not len(df):
+            continue
+        d = df.dropna(subset=["Close"])
+        if not len(d) or d.index[0] > t0:
+            continue
+        after = d[d.index >= t0]
+        if not len(after):
+            return None
+        pct = lambda v: round((float(v) / price - 1) * 100, 2)
+        return {"hi": pct(after["High"].max()), "lo": pct(after["Low"].min()), "now": pct(after["Close"].iloc[-1])}
+    return None
 
 
 def sell_linked(state, book, t, now):
@@ -1409,7 +1443,8 @@ def main():
     KAKAO_RULES = kakao_rules()
     if app_bridge.enabled():
         try:
-            CHART_SET.update(app_bridge.recent_alert_yts(datetime.now(timezone.utc) - timedelta(days=3)))
+            RECENT[:] = app_bridge.recent_alerts(datetime.now(timezone.utc) - timedelta(days=3))
+            CHART_SET.update(x["yt"] for x in RECENT)
         except Exception as e:
             log(f"최근 알림 종목 받기 실패 ({app_bridge.why(e)})")
     if KAKAO_HOLD_ONLY:
