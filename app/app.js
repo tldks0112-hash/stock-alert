@@ -621,6 +621,13 @@
     var h = holds().filter(function (x) { return x.yt === a.yt; })[0];
     if (h) return '<section class="card' + (+h.qty > 0 ? ' held' : '') + '"><div class="line"><h2 style="font-size:15px">' + (+h.qty > 0 ? '내가 보유 중이에요' : '관심 종목이에요') + '</h2>' +
       (+h.qty > 0 ? '<span class="tag">' + (+h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 6 }) + (a.market === 'crypto' ? '개' : '주') + '</span>' : '') + '</div>' +
+      (function () {                     // 평단가와 지금(없으면 알림 때) 가격 비교
+        if (!(+h.avg > 0)) return '';
+        var an = S.han && S.han.data && S.han.data.an && S.han.data.an[h.yt], now = an && an.ok ? an.price : a.price;
+        if (!(now > 0)) return '';
+        var g = (now / h.avg - 1) * 100;
+        return '<div class="line havg"><span>내 평단가 <small class="small">' + (an && an.ok ? '지금 가격과 비교' : '알림 때 가격과 비교') + ' · 참고용</small></span><b>' + money(a.market, +h.avg) + ' <i class="' + tone(g) + '">' + pct(g) + '</i></b></div>';
+      })() +
       '<a class="btn ghost" href="#/hold">내 보유에서 보기</a></section>';
     var cd = a.market === 'kr' ? a.yt.split('.')[0] : a.market === 'crypto' ? a.yt.replace('-KRW', '') : a.yt;
     return '<section class="card"><h2 style="font-size:15px">내 보유</h2><p class="small" style="margin:0 0 8px">샀다면 수량과 단가를 넣어 두세요. 손익과 종목 분석을 볼 수 있어요.</p>' +
@@ -877,8 +884,9 @@
     if (!ok) return '<section class="card hcard"><div class="hhead">' + name + '</div><p class="small" style="margin:0">' + esc(an.err || '분석할 수 없어요') + '. 종목 코드를 확인해 주세요.</p>' + hButtons(h, B, open) + '</section>';
     var x = an.extra || {}, v = an.vals || {};
     var head = '<div class="hhead">' + name + '<div class="hprice"><b data-roll="hp:' + esc(h.yt) + '">' + money(m, price) + '</b><span class="' + tone(an.chg) + '">' + pct(an.chg) + '</span></div></div>' + evBadges(an);
-    var mine = pl != null ? '<div class="line hpl"><span>내 손익' + (h.qty > 0 ? ' <small class="small">' + (+h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 6 }) + (m === 'crypto' ? '개' : '주') + '</small>' : '') + '</span><b class="' + tone(pl * 100) + '">' +
-      (val != null ? amt(m === 'us' ? 'us' : 'kr', (price - h.avg) * h.qty) + ' ' : '') + '(' + pct(pl * 100) + ')</b></div>' : '';
+    var mine = pl != null ? '<div class="line hpl havg"><span>내 평단가 <small class="small">지금 가격과 비교 · 참고용</small></span><b>' + money(m, h.avg) + ' <i class="' + tone(pl * 100) + '">' + pct(pl * 100) + '</i></b></div>' +
+      (val != null ? '<div class="line hpl"><span>내 손익 <small class="small">' + (+h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 6 }) + (m === 'crypto' ? '개' : '주') + '</small></span><b class="' + tone(pl * 100) + '">' +
+        amt(m === 'us' ? 'us' : 'kr', (price - h.avg) * h.qty) + '</b></div>' : '') : '';
     var list = axList(an), say = sayOf(list), score = an.score;
     var glance = (an.axes ? '<div class="glance">' + radar(list, score) + '<div class="gtext"><span class="small">종합 점수 <small>' + list.length + '가지 평균 · 참고용</small></span>' +
       '<b class="' + (score == null ? '' : score >= 70 ? 'red' : score < 40 ? 'blue' : '') + '">' + (score == null ? '정보 부족' : score + '점 · ' + (score >= 70 ? '높은 편' : score >= 40 ? '중간' : '낮은 편')) + '</b>' +
@@ -1054,8 +1062,8 @@
       var B = BROKERS[broker()[kind]], deep = B.url && B.url(o) && !o.byName;
       w.innerHTML = '<div class="sheet osheet" role="dialog" aria-modal="true" aria-labelledby="oT"><i class="grab" aria-hidden="true"></i>' +
         '<h2 id="oT">' + esc(o.name) + ' 주문하기</h2><p>주문은 고른 앱에서 직접 해요. 값을 누르면 복사돼요.</p>' +
-        '<div class="ocopy">' + [['종목 코드', o.byName ? o.name : o.code, '']].concat(rows.map(function (r) { return [r[0], rawNum(o.market, r[1]), r[2] || '', r[1]]; })).map(function (r) {
-          return '<button type="button" data-o="copy" data-v="' + esc(r[1]) + '" data-l="' + esc(r[0]) + '"><span>' + esc(r[0]) + '</span><b class="' + r[2] + '">' + esc(r[3] != null ? money(o.market, r[3]) : r[1]) + '</b><i>복사</i></button>'; }).join('') + '</div>' +
+        '<div class="ocopy">' + [['종목 코드', o.byName ? o.name : o.code, '']].concat(rows.map(function (r) { return [r[0], rawNum(o.market, r[1]), r[2] || '', r[1], r[3]]; })).map(function (r) {
+          return '<button type="button" data-o="copy" data-v="' + esc(r[1]) + '" data-l="' + esc(r[0]) + '"><span>' + esc(r[0]) + '</span><b class="' + r[2] + '">' + esc(r[3] != null ? money(o.market, r[3]) : r[1]) + (r[4] ? ' <small class="' + r[4][1] + '">' + esc(r[4][0]) + '</small>' : '') + '</b><i>복사</i></button>'; }).join('') + '</div>' +
         (kind === 'coin' && B.abroad ? '<p class="small onote">해외 거래소는 USDT(달러) 가격이라 위 원화 가격과 달라요. 비율로 참고하세요.</p>' : '') +
         '<div class="opick" role="radiogroup" aria-label="' + (kind === 'coin' ? '거래소' : '증권사') + '">' + apps.map(function (k) {
           var on = broker()[kind] === k; return '<button type="button" data-o="pick" data-v="' + k + '" class="' + (on ? 'on' : '') + '" aria-pressed="' + on + '">' + esc(BROKERS[k].name) + '</button>'; }).join('') + '</div>' +
@@ -2382,7 +2390,8 @@
     horder: function (t) {
       var h = holds().filter(function (x) { return x.id === t.dataset.v; })[0]; if (!h) return;
       var an = S.han && S.han.data && S.han.data.an && S.han.data.an[h.yt];
-      var rows = [['지금 가격', an && an.ok ? an.price : null, '']].concat(+h.qty > 0 && +h.avg > 0 ? [['내 평균 단가', +h.avg, '']] : []);
+      var g = an && an.ok && +h.avg > 0 ? (an.price / h.avg - 1) * 100 : null;
+      var rows = [['지금 가격', an && an.ok ? an.price : null, '']].concat(+h.avg > 0 ? [['내 평단가', +h.avg, '', g != null ? ['지금 ' + pct(g), tone(g)] : null]] : []);
       paList().filter(function (q) { return q.yt === h.yt && !q.fired_at; }).slice(0, 2).forEach(function (q) { var up = q.kind === 'up'; rows.push([up ? '목표 가격' : '손절 가격', +q.price, up ? 'red' : 'blue']); });
       orderSheet({ name: h.name, market: h.market, code: h.code, rows: rows });
     },
