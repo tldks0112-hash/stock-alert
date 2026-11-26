@@ -12,7 +12,7 @@
     return LEGAL.advisorNo ? '유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ')로 정식 금융투자업자가 아니에요. 개별 상담과 자금 운용은 하지 않으며, 원금 손실이 생길 수 있어요.'
       : '투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.';
   }
-  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping', onb: 'tn_onboarded', nvre: 'tn_naver_reask' };
+  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping', onb: 'tn_onboarded', nvre: 'tn_naver_reask', hgone: 'tn_hold_del' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
@@ -669,7 +669,27 @@
   var COIN_APPS = ['upbit', 'bithumb', 'coinone', 'korbit'];
   var COIN_ABROAD = ['binance', 'bybit', 'okx', 'bitget', 'coinbase'];
   function holds() { var x = store.get(K.hold, []); return Array.isArray(x) ? x : []; }
-  function holdSave(x) { store.set(K.hold, x); S.han = null; }
+  function holdKey(h) { return h && (h.yt || h.id); }
+  function holdSave(x) {                 // 바뀐 종목엔 바꾼 시각(u), 지운 종목은 지운 시각을 남겨서 기기끼리 합칠 때 최신 것이 이김
+    var old = holds(), byId = {}, now = Date.now(), gone = store.get(K.hgone, {}) || {}, keep = {};
+    var plain = function (h) { var c = {}; for (var k in h) if (k !== 'u') c[k] = h[k]; return JSON.stringify(c); };
+    old.forEach(function (h) { if (h) byId[h.id] = h; });
+    x.forEach(function (h) { var o = byId[h.id]; if (!o || plain(o) !== plain(h)) h.u = now; keep[holdKey(h)] = 1; delete gone[holdKey(h)]; });
+    old.forEach(function (h) { var k = holdKey(h); if (k && !keep[k]) gone[k] = now; });
+    store.set(K.hgone, gone); store.set(K.hold, x); S.han = null;
+  }
+  function mergeHolds(a, b, ga, gb) {    // 두 기록 합치기: 같은 종목은 더 최근에 바꾼 쪽, 지운 뒤에 바뀐 적 없으면 지움
+    var gone = {}, best = {}, order = [];
+    [ga, gb].forEach(function (g) { for (var k in (g || {})) if (!(gone[k] >= g[k])) gone[k] = +g[k] || 0; });
+    [a, b].forEach(function (L) { (Array.isArray(L) ? L : []).forEach(function (h) {
+      var k = holdKey(h); if (!k) return;
+      if (!best[k]) { best[k] = h; order.push(k); } else if ((+h.u || 0) > (+best[k].u || 0)) best[k] = h;
+    }); });
+    var list = order.map(function (k) { return best[k]; }).filter(function (h) { var g = gone[holdKey(h)]; return !(g && g >= (+h.u || 0)); });
+    var cut = Date.now() - 90 * 864e5, g2 = {};
+    for (var k in gone) if (gone[k] > cut && !list.some(function (h) { return holdKey(h) === k; })) g2[k] = gone[k];
+    return { list: list, gone: g2 };
+  }
   function hind() { var x = store.get(K.hind, null); return Array.isArray(x) ? x : HIND_DEF.slice(); }
   function broker() { var b = store.get(K.broker, {}) || {}; return { stock: STOCK_APPS.indexOf(b.stock) >= 0 ? b.stock : 'toss', coin: COIN_APPS.concat(COIN_ABROAD).indexOf(b.coin) >= 0 ? b.coin : 'upbit' }; }
   function loadHold(force) {
@@ -717,9 +737,9 @@
         (a.fired_at ? ' <small>울림 ' + mmdd(kstDay(a.fired_at)) + ' ' + hm(a.fired_at) + '</small>' : gap != null ? ' <small>' + pct(gap) + '</small>' : '') +
         '<button data-act="padel" data-v="' + a.id + '" aria-label="가격 알림 지우기">' + ICON.x + '</button></span>';
     }).join('');
-    if (S.paopen === h.id) return '<div class="parow">' + chips + '</div>' + paForm(h, an);
     var rec = h.avg > 0 && +h.qty > 0 && price && !mine.some(function (a) { return !a.fired_at; }) ? '<button class="pa rec" data-act="parec" data-v="' + esc(h.id) + '">⚡ 평단 기준 손절 -10% · 목표 +20% 한 번에 걸기</button>' : '';
-    return '<div class="parow">' + chips + '<button class="pa add" data-act="paopen" data-v="' + esc(h.id) + '">+ 가격 알림</button>' + rec + '</div>';
+    if (S.paopen === h.id) return '<div class="parow">' + chips + rec + '</div>' + paForm(h, an);
+    return '<div class="parow">' + chips + '<button class="pa add" data-act="paopen" data-v="' + esc(h.id) + '">+ 가격 알림</button></div>';
   }
   function paForm(h, an) {
     if (!LIVE) return '<p class="small pabox">앱 연결이 끝나면 쓸 수 있어요.</p>';
@@ -892,7 +912,8 @@
       '<b class="' + (score == null ? '' : score >= 70 ? 'red' : score < 40 ? 'blue' : '') + '">' + (score == null ? '정보 부족' : score + '점 · ' + (score >= 70 ? '높은 편' : score >= 40 ? '중간' : '낮은 편')) + '</b>' +
       (say ? '<p>' + esc(say) + '</p>' : '') + legendTop(an) + '</div></div><p class="small gnote" style="margin:6px 2px 0">점수와 원칙 점검은 지난 데이터로 계산한 참고 지표예요. 사거나 팔라는 뜻이 아니에요.</p>' : '');
     var ni = nws && nws.items;
-    var body = extRow(h) + sparkBig(an.spark) + mine + glance + probLine(probFor(prob, h, an)) + (ni && ni.length && !open ? newsList(ni, 1) : '');
+    var scoreLine = an.axes && score != null ? '<div class="line hscore"><span>종합 점수 <small class="small">참고용 · 종목 분석에서 자세히</small></span><b class="' + (score >= 70 ? 'red' : score < 40 ? 'blue' : '') + '">' + score + '점 · ' + (score >= 70 ? '높은 편' : score >= 40 ? '중간' : '낮은 편') + '</b></div>' : '';
+    var body = extRow(h) + sparkBig(an.spark) + mine + (open ? glance + probLine(probFor(prob, h, an)) : scoreLine) + (ni && ni.length && !open ? newsList(ni, 1) : '');
     var more = '';
     if (open) {
       var bits = an.bits, keys = (prob && prob.ind) || HIND.map(function (q) { return q[0]; });
@@ -967,7 +988,7 @@
         '<p class="small" style="margin:8px 0 0">고른 지표가 지금과 같았던 날을 과거에서 찾아, 며칠 뒤 실제로 오른 비율을 보여 줘요. 많이 고를수록 비슷한 날이 줄어요.</p>' + chips + '</details></section>';
     return top('<span style="font-size:18px;font-weight:700">내 보유</span>', '<a class="btn small-btn" href="#/hold/add">+ 종목 추가</a>') + demoBar() +
       '<main class="page">' + brokerBar() + body +
-      paMeter() + '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
+      paMeter() + '<p class="foot-note">점수와 원칙 점검은 지난 데이터로 계산한 참고 지표예요. 사거나 팔라는 뜻이 아니에요. 국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
   }
   function brokerBar() {                  // 시안님 계정: 토스증권 보유 자동 반영 상태
     if (!session()) return '';
@@ -1193,9 +1214,8 @@
     var xs = S.ann || [], seen = store.get(K.nseen, ''), cut = xs.map(function (x) { return x.id; }).indexOf(seen);
     var list = !xs.length ? '<p class="empty">공지사항을 불러오는 중이에요.</p>' : xs.map(function (x, i) {
       var fresh = cut < 0 ? i === 0 : i < cut;
-      return '<section class="card ann"><div class="line"><h2 style="font-size:15px">' + esc(x.title) + '</h2>' + (fresh ? '<span class="tag new">새 글</span>' : '') + '</div>' +
-        '<p class="small" style="margin:0">' + esc(x.date || '') + '</p>' +
-        (Array.isArray(x.body) ? '<ul>' + x.body.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' : '') + '</section>';
+      return '<details class="card acc ann"' + (i === 0 || fresh ? ' open' : '') + '><summary><span><b>' + esc(x.title) + (fresh ? ' <span class="tag new">새 글</span>' : '') + '</b><small class="small">' + esc(x.date || '') + '</small></span><span class="chev" aria-hidden="true"></span></summary>' +
+        '<div class="accb">' + (Array.isArray(x.body) ? '<ul>' + x.body.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' : '') + '</div></details>';
     }).join('');
     setTimeout(function () { if (unread()) { markSeen(); document.querySelectorAll('nav.menu .dot').forEach(function (d) { d.remove(); }); } }, 600);
     return top('<span style="display:flex;align-items:center;gap:2px"><a class="icon-btn" href="#/settings" aria-label="뒤로">' + ICON.back + '</a><span style="font-size:16px;font-weight:700">공지사항</span></span>') +
@@ -1399,7 +1419,7 @@
     var who = function (a) { return esc(a.name || a.mail || ('계정 ' + a.id)); };
     var rows = A.map(function (a) {
       var hold = (a.hold || []).map(function (h) { return '<span class="ahold">' + esc(h.n || '') + ' <b>' + (+h.q).toLocaleString('ko-KR', { maximumFractionDigits: 6 }) + (h.m === 'crypto' ? '개' : '주') + '</b></span>'; }).join('');
-      return '<div class="acc"><div class="line"><span class="accn"><i class="pv pv-' + esc((a.provider || '').replace(':', '-')) + '">' + esc(PV[a.provider] || a.provider || '-') + '</i><b>' + who(a) + '</b>' + (a.owner ? '<i class="ev">카톡 연결</i>' : '') + '</span>' +
+      return '<div class="accrow"><div class="line"><span class="accn"><i class="pv pv-' + esc((a.provider || '').replace(':', '-')) + '">' + esc(PV[a.provider] || a.provider || '-') + '</i><b>' + who(a) + '</b>' + (a.owner ? '<i class="ev">카톡 연결</i>' : '') + '</span>' +
         '<span class="small">' + (a.last ? since(a.last) : '-') + '</span></div>' +
         '<p class="small" style="margin:2px 0 4px">' + (a.mail ? esc(a.mail) + ' · ' : '') + '가입 ' + esc(dayLabel(a.joined)) + (a.saved ? ' · 기록 저장 ' + since(a.saved) : '') + '</p>' +
         (hold ? '<div class="aholds">' + hold + '</div>' : '<p class="small" style="margin:0">보유 종목 없음</p>') + (a.watch ? '<p class="small" style="margin:4px 0 0">관심 ' + a.watch + '개</p>' : '') + '</div>';
@@ -1937,11 +1957,12 @@
         var on = store.get(K.theme, 'auto') === q[0];
         return '<button class="' + (on ? 'on' : '') + '" data-act="theme" data-v="' + q[0] + '" aria-pressed="' + on + '">' + q[1] + '</button>';
       }).join('') + '</div><p class="small" style="margin:8px 0 0">자동은 휴대폰의 밝기 설정(다크 모드)을 따라가요.</p></section>' +
-      '<section class="card"><h2 style="font-size:15px">증권사 · 거래소 앱</h2><p class="small" style="margin:0">내 보유에서 <b>…에서 보기</b>를 누르면 여기서 고른 앱이 열리고 종목 코드가 복사돼요. 토스증권(국장)과 업비트는 종목 화면으로 바로 가요.</p>' +
+      '<details class="card acc kinds brk"' + (S.brkOpen ? ' open' : '') + '><summary><span><b>주문할 앱</b><small class="small">' + esc(BROKERS[broker().stock].name) + ' · ' + esc(BROKERS[broker().coin].name) + '</small></span><span class="chev" aria-hidden="true"></span></summary><div class="accb">' +
+        '<p class="small" style="margin:0">알림·보유의 <b>…에서 주문</b>을 누르면 여기서 고른 앱이 열려요. 주문 창 안에서도 바꿀 수 있어요.</p>' +
         '<h3 class="pick-h">주식 (국장 · 미장)</h3><div class="picks">' + STOCK_APPS.map(function (k) { return bchip(k, 'stock'); }).join('') + '</div>' +
         '<h3 class="pick-h">코인 · 국내</h3><div class="picks">' + COIN_APPS.map(function (k) { return bchip(k, 'coin'); }).join('') + '</div>' +
         '<h3 class="pick-h">코인 · 해외</h3><div class="picks">' + COIN_ABROAD.map(function (k) { return bchip(k, 'coin'); }).join('') + '</div>' +
-        (BROKERS[broker().coin].abroad ? '<p class="small pick-note">해외 거래소는 USDT 거래 화면으로 열어요. 앱의 코인 가격은 원화(업비트) 기준이라 조금 다를 수 있어요. 국내에 신고되지 않은 거래소는 이용 전에 금융정보분석원 신고 여부를 확인해 주세요.</p>' : '') + '</section>' +
+        (BROKERS[broker().coin].abroad ? '<p class="small pick-note">해외 거래소는 USDT 거래 화면으로 열어요. 앱의 코인 가격은 원화(업비트) 기준이라 조금 다를 수 있어요. 국내에 신고되지 않은 거래소는 이용 전에 금융정보분석원 신고 여부를 확인해 주세요.</p>' : '') + '</div></details>' +
       '<a class="list item-link" href="#/notice"><span><b>공지사항' + (unread() ? ' <span class="tag new">새 글 ' + unread() + '</span>' : '') + '</b><small>' + (S.ann && S.ann[0] ? esc(S.ann[0].date + ' · ' + S.ann[0].title) : '업데이트 소식') + '</small></span><span aria-hidden="true">›</span></a>' +
       '<a class="list item-link" href="#/feedback"><span><b>의견 보내기' + (fbUnread() ? ' <i class="newtag">새 답글 ' + fbUnread() + '</i>' : '') + '</b><small>불편한 점, 오류, 바라는 기능을 알려 주세요 · 답글도 여기서 봐요</small></span><span aria-hidden="true">›</span></a>' +
       '<a class="list item-link" href="#/guide"><span><b>타점노트 사용법</b><small>알림 읽는 법 · 사고파는 순서 · 장 시간</small></span><span aria-hidden="true">›</span></a>' +
@@ -2453,7 +2474,10 @@
     else S.agree[+v] = e.target.checked;
     render();
   });
-  $app.addEventListener('toggle', function (e) { if (e.target.classList && e.target.classList.contains('kinds')) S.kindsOpen = e.target.open; }, true);
+  $app.addEventListener('toggle', function (e) {
+    var c = e.target.classList; if (!c) return;
+    if (c.contains('brk')) S.brkOpen = e.target.open; else if (c.contains('kinds')) S.kindsOpen = e.target.open;
+  }, true);
   $app.addEventListener('pointermove', chartScrub);
   $app.addEventListener('pointerdown', chartScrub);
   $app.addEventListener('pointerleave', function (e) { var b = e.target.closest && e.target.closest('.chart[data-chart]'); if (b) { var t = b.querySelector('.ctip'), l = b.querySelector('.cscrub'); if (t) t.style.display = 'none'; if (l) l.style.display = 'none'; } }, true);
@@ -2570,7 +2594,7 @@
 
   // ---------- 로그인 (카카오 · 네이버 · Google) — 선택 사항, 로그인하면 기록을 계정에 저장 ----------
   // Supabase Auth의 PKCE 방식: 로그인 화면 → 이 앱 주소?code=... 로 돌아오면 토큰으로 바꿈. 비밀값은 앱에 없음.
-  var SYNC_KEYS = [K.hold, K.prefs, K.hind, K.broker, K.theme];
+  var SYNC_KEYS = [K.hold, K.hgone, K.prefs, K.hind, K.broker, K.theme];
   var PROVIDERS = { kakao: { name: '카카오', id: 'kakao' }, naver: { name: '네이버', id: 'custom:naver' }, google: { name: 'Google', id: 'google' } };
   K.auth = 'tn_auth'; K.sync = 'tn_sync'; K.pkce = 'tn_pkce';
   function authBase() { return (CFG.supabaseUrl || '').replace(/\/$/, '') + '/auth/v1'; }
@@ -2623,12 +2647,12 @@
     return authPost('/token?grant_type=refresh_token', { refresh_token: x.refresh_token }).then(function (t) { saveSession(t); return t.access_token; })
       .catch(function () { store.del(K.auth); render(); return null; });
   }
-  function userRest(method, path, body, extra) {
+  function userRest(method, path, body, extra, keep) {
     return freshToken().then(function (tok) {
       if (!tok) throw new Error('signed out');
       var h = { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' };
       for (var k in (extra || {})) h[k] = extra[k];
-      return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/' + path, { method: method, headers: h, body: body == null ? undefined : JSON.stringify(body) })
+      return fetch(CFG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/' + path, { method: method, headers: h, body: body == null ? undefined : JSON.stringify(body), keepalive: !!keep })
         .then(function (r) {                // 저장은 내용 없이 200/201/204로 올 수 있음 → 빈 응답도 성공
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.text().then(function (t) { if (!t) return null; try { return JSON.parse(t); } catch (_) { return null; } });
@@ -2636,43 +2660,62 @@
     });
   }
   function localBlob() { var d = {}; SYNC_KEYS.forEach(function (k) { var v = store.get(k, undefined); if (v !== undefined) d[k] = v; }); return d; }
-  function mergeById(a, b) {             // 같은 id는 이 휴대폰 쪽을 남기고 합침
-    var seen = {}, out = [];
-    (Array.isArray(a) ? a : []).concat(Array.isArray(b) ? b : []).forEach(function (x) { if (x && x.id != null && !seen[x.id]) { seen[x.id] = 1; out.push(x); } });
-    return out;
+  var pushTimer = null, syncing = false, pushing = null, pushAgain = false;
+  function syncState(patch) { var sy = store.get(K.sync, {}) || {}; for (var k in patch) sy[k] = patch[k]; localStorage.setItem(K.sync, JSON.stringify(sy)); return sy; }
+  function absorbHolds(d) {              // 서버 기록의 보유를 이 기기 기록과 합침 → 서버가 이미 같은 내용이면 true
+    var before = JSON.stringify([store.get(K.hold, []), store.get(K.hgone, {}) || {}]);
+    var m = mergeHolds(store.get(K.hold, []), d[K.hold], store.get(K.hgone, {}), d[K.hgone]);
+    syncing = true;
+    try { store.set(K.hold, m.list); store.set(K.hgone, m.gone); } finally { syncing = false; }
+    if (JSON.stringify([m.list, m.gone]) !== before) { S.han = null; if (route().p === 'hold') setTimeout(render, 0); }
+    return JSON.stringify(m.list) === JSON.stringify(d[K.hold] || []) && JSON.stringify(m.gone) === JSON.stringify(d[K.hgone] || {});
   }
-  var pushTimer = null, syncing = false;
-  function pushNow() {
+  function pushNow(keep) {               // 저장: 서버 기록을 먼저 읽어 합친 뒤 올림 (다른 기기 · 증권사 자동 반영을 덮어쓰지 않음)
     var x = session();
     if (!x || !LIVE) return Promise.resolve();
-    clearTimeout(pushTimer);
-    var at = new Date().toISOString();
-    return userRest('POST', 'user_data?on_conflict=user_id', { user_id: x.user.id, data: localBlob(), updated_at: at }, { Prefer: 'resolution=merge-duplicates,return=minimal' })
-      .then(function () { var sy = store.get(K.sync, {}) || {}; sy.pushed = at; sy.uid = x.user.id; localStorage.setItem(K.sync, JSON.stringify(sy)); S.syncErr = false; })
-      .catch(function () { S.syncErr = true; });
+    clearTimeout(pushTimer); pushTimer = null;
+    if (pushing) { pushAgain = true; return pushing; }
+    var at = new Date().toISOString(), path = 'user_data?select=data,updated_at&user_id=eq.' + encodeURIComponent(x.user.id);
+    pushing = userRest('GET', path, null, null, keep).then(function (rows) {
+      var row = rows && rows[0];
+      if (row && row.data) absorbHolds(row.data);
+      return userRest('POST', 'user_data?on_conflict=user_id', { user_id: x.user.id, data: localBlob(), updated_at: at }, { Prefer: 'resolution=merge-duplicates,return=minimal' }, keep);
+    }).then(function () { syncState({ pushed: at, uid: x.user.id, dirty: !!pushTimer }); S.syncErr = false; })
+      .catch(function () { S.syncErr = true; })
+      .then(function () { pushing = null; if (pushAgain) { pushAgain = false; return pushNow(); } });
+    return pushing;
   }
   onSet = function (k) {
     if (syncing || SYNC_KEYS.indexOf(k) < 0 || !session()) return;
-    clearTimeout(pushTimer); pushTimer = setTimeout(function () { pushNow().then(function () { if (route().p === 'settings') render(); }); }, 1500);
+    syncState({ dirty: true });
+    clearTimeout(pushTimer); pushTimer = setTimeout(function () { pushNow().then(function () { if (route().p === 'settings') render(); }); }, 700);
   };
+  function flushPush() {                 // 앱을 닫거나 다른 앱으로 갈 때: 기다리던 저장을 바로 한 번에 보냄 (닫혀도 끝까지 가도록)
+    var x = session();
+    if (!pushTimer || !x || !LIVE) return;
+    clearTimeout(pushTimer); pushTimer = null;
+    var at = new Date().toISOString();
+    userRest('POST', 'user_data?on_conflict=user_id', { user_id: x.user.id, data: localBlob(), updated_at: at }, { Prefer: 'resolution=merge-duplicates,return=minimal' }, true)
+      .then(function () { syncState({ pushed: at, uid: x.user.id, dirty: false }); }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flushPush(); });
+  window.addEventListener('pagehide', flushPush);
   function pullAndMerge(first) {         // 처음 로그인: 합치기 / 그다음: 서버가 더 최근이면 서버 기록으로
     var x = session();
     if (!x) return Promise.resolve();
     return userRest('GET', 'user_data?select=data,updated_at&user_id=eq.' + encodeURIComponent(x.user.id)).then(function (rows) {
       var row = rows && rows[0], sy = store.get(K.sync, {}) || {};
       if (!row) return pushNow();
-      var d = row.data || {}, mine = sy.uid === x.user.id && sy.pushed;
+      var d = row.data || {}, mine = sy.uid === x.user.id && sy.pushed, others = [K.prefs, K.hind, K.broker, K.theme];
+      var same = absorbHolds(d);
       syncing = true;
       try {
-        if (first || !mine) {
-          store.set(K.hold, mergeById(store.get(K.hold, []), d[K.hold]));
-          [K.prefs, K.hind, K.broker, K.theme].forEach(function (k) { if (d[k] !== undefined && store.get(k, undefined) === undefined) store.set(k, d[k]); });
-        } else if (row.updated_at > sy.pushed) {
-          SYNC_KEYS.forEach(function (k) { if (d[k] !== undefined) store.set(k, d[k]); });
-        }
+        if (first || !mine) others.forEach(function (k) { if (d[k] !== undefined && store.get(k, undefined) === undefined) store.set(k, d[k]); });
+        else if (row.updated_at > sy.pushed && !sy.dirty) others.forEach(function (k) { if (d[k] !== undefined) store.set(k, d[k]); });
       } finally { syncing = false; }
-      applyTheme(); S.han = null;
-      return (first || !mine || row.updated_at <= sy.pushed) ? pushNow() : (function () { var s2 = store.get(K.sync, {}) || {}; s2.pushed = row.updated_at; s2.uid = x.user.id; localStorage.setItem(K.sync, JSON.stringify(s2)); })();
+      applyTheme();
+      if (first || !mine || !same || sy.dirty) return pushNow();
+      syncState({ pushed: row.updated_at > sy.pushed ? row.updated_at : sy.pushed, uid: x.user.id });
     }).catch(function () { S.syncErr = true; });
   }
   function handleAuthReturn() {          // 로그인 화면에서 돌아온 경우
@@ -2708,7 +2751,7 @@
     var x = session();
     if (x) fetch(authBase() + '/logout', { method: 'POST', headers: { apikey: CFG.supabaseKey, Authorization: 'Bearer ' + x.access_token } }).catch(function () {});
     store.del(K.auth); store.del(K.sync);
-    if (wipe) { syncing = true; store.del(K.hold); syncing = false; S.han = null; }
+    if (wipe) { syncing = true; store.del(K.hold); store.del(K.hgone); syncing = false; S.han = null; }
     render();
   }
   function deleteAccount() {
