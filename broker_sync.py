@@ -128,13 +128,16 @@ def to_holds(items, found):
     return out
 
 
-def merge(hold, fresh, now_iso):
+def merge(hold, fresh, now_iso, gone=None):
     """앱 보유 목록에 토스 보유를 맞춤 → (새 목록, 바뀐 개수)
     - 같은 종목이 있으면 수량 · 평균가를 토스 값으로 (표시 src='toss')
     - 없으면 새로 넣음
     - 예전에 토스에서 가져왔는데 지금은 없는 종목은 수량 0 (관심 종목으로 남김)
-    - 직접 넣은 다른 종목(코인 · 다른 증권사)은 그대로"""
+    - 직접 넣은 다른 종목(코인 · 다른 증권사)은 그대로
+    - 앱에서 지운 종목(gone)은 다시 넣지 않음 · 바꾼 종목엔 바꾼 시각 u(ms)를 남겨 앱과 합칠 때 최신 것이 이김"""
     hold = [dict(h) for h in (hold if isinstance(hold, list) else []) if isinstance(h, dict)]
+    gone = gone if isinstance(gone, dict) else {}
+    now_ms = int(datetime.fromisoformat(now_iso).timestamp() * 1000)
     changed = 0
     seen = set()
     for h in hold:
@@ -142,18 +145,19 @@ def merge(hold, fresh, now_iso):
         if f:
             seen.add(f["yt"])
             if abs(_num(h.get("qty")) - f["qty"]) > 1e-9 or abs(_num(h.get("avg")) - f["avg"]) > 1e-6 or h.get("src") != "toss":
-                h["qty"], h["avg"], h["src"] = f["qty"], f["avg"], "toss"
+                h["qty"], h["avg"], h["src"], h["u"] = f["qty"], f["avg"], "toss", now_ms
                 changed += 1
         elif h.get("src") == "toss":
             if _num(h.get("qty")) > 0:
                 h["qty"], h["avg"] = 0, 0
                 changed += 1
             h.pop("src", None)
+            h["u"] = now_ms
     for yt, f in fresh.items():
-        if yt in seen:
+        if yt in seen or yt in gone:            # 앱에서 지운 종목은 다시 안 넣음 (직접 다시 넣으면 그때부터 맞춤)
             continue
         hold.append({"id": "toss-" + SAFE_ID.sub("", yt)[:24], "yt": yt, "code": f["code"], "name": f["name"], "market": f["market"],
-                     "qty": f["qty"], "avg": f["avg"], "at": now_iso, "src": "toss"})
+                     "qty": f["qty"], "avg": f["avg"], "at": now_iso, "src": "toss", "u": now_ms})
         changed += 1
     return hold, changed
 
@@ -232,7 +236,7 @@ def run(book, now):
                                    params={"select": "data", "user_id": f"eq.{owner}"}))
         rows = r.json()
         data = (rows[0].get("data") if rows else None) or {}
-        hold, changed = merge(data.get("tn_hold"), fresh, now.isoformat())
+        hold, changed = merge(data.get("tn_hold"), fresh, now.isoformat(), data.get("tn_hold_del"))
         if changed:
             data["tn_hold"] = hold
             ab.upsert("user_data", [{"user_id": owner, "data": data, "updated_at": now.isoformat()}], "user_id")

@@ -75,6 +75,7 @@ CONFIRM_MIN = S.get("유지_확인_분", 3)        # 돌파 후 몇 분 유지�
 MIN_RR = S.get("최소_손익비", 2.0)
 STOP_ATR = S.get("손절_여유_ATR", 0.5)
 COOLDOWN_MIN = S.get("같은_알림_간격_분", 120)
+SELL_AGAIN_DROP = float(S.get("매도_재알림_추가하락", 3.0))   # 같은 날 같은 종목 매도 알림은 한 번 · 이만큼(%) 더 내리면 한 번 더
 LOOKBACK_MIN = 20
 VERBOSE = os.environ.get("VERBOSE") == "1"    # 1이면 종목별 자세한 기록 (공개 저장소에선 끄세요)
 
@@ -1232,6 +1233,32 @@ def alert_result(x, m, h):
     return None
 
 
+def sell_repeat_ok(book, key, price, now, market):
+    """매도 알림 반복 줄이기: 같은 날(현지 기준, 코인은 한국 날짜) 같은 종목은 한 번,
+    단 마지막 매도 알림 가격보다 SELL_AGAIN_DROP% 넘게 더 내렸으면 다시 알림"""
+    if book is None:
+        return True
+    rec = (book["flags"].get("sellpx") or {}).get(key)
+    if not rec:
+        return True
+    try:
+        at, px = datetime.fromisoformat(rec[0]), float(rec[1])
+    except (TypeError, ValueError, IndexError):
+        return True
+    tz = KST if market == "crypto" else TZ[market]
+    if at.astimezone(tz).date() != now.astimezone(tz).date():
+        return True
+    return price <= px * (1 - SELL_AGAIN_DROP / 100)
+
+
+def sell_mark(book, key, price, now):
+    sp = book["flags"].setdefault("sellpx", {})
+    sp[key] = [now.isoformat(), float(price)]
+    cut = now - timedelta(days=3)
+    for k in [k for k, v in sp.items() if not isinstance(v, list) or datetime.fromisoformat(v[0]) < cut]:
+        sp.pop(k, None)
+
+
 def sell_linked(state, book, t, now):
     """매도 알림을 보낼 만한 종목인가: 실전 기록에 보유 중이거나, 최근 7일 안에 매수 알림이 나간 종목"""
     h = hid(t)
@@ -1304,7 +1331,7 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             flags["linked"] = True                 # 내가 보유에 넣은 종목은 매도 알림도 보냄
         if KAKAO_HOLD_ONLY and not held:
             log(f"{t}: {word} 타점 {score}/10 · 내 보유 종목이 아니라 카톡 안 함")
-        elif in_cooldown(state, key, now, market, once):
+        elif in_cooldown(state, key, now, market, once) or (side == "sell" and not sell_repeat_ok(book, key, lv["price"], now, market)):
             log(f"{t}: {word} 타점 (최근에 이미 알림)")
         elif side == "sell" and not SELL_ALL and not flags["linked"]:
             log(f"{t}: 매도 타점 {score}/10 · 보유·최근 매수 알림 없는 종목이라 카톡 안 함")
@@ -1322,7 +1349,8 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(blocked + hard)})")
         else:
             to_kakao = True
-        if app_bridge.enabled() and t not in KAKAO_ONLY and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once):
+        if app_bridge.enabled() and t not in KAKAO_ONLY and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once) \
+                and (side == "buy" or sell_repeat_ok(book, akey, lv["price"], now, market)):
             to_app_ = True
         if to_kakao or to_app_:
             alerts.append({"key": key, "akey": akey, "kakao": to_kakao, "app": to_app_,
@@ -1517,6 +1545,8 @@ def main():
                     base.send_kakao(token, a["msg"])
                     time.sleep(1)
                 state[a["key"]] = now.isoformat()
+                if a["side"] == "sell":
+                    sell_mark(book, a["key"], a["price"], now)
                 if a["side"] == "buy":
                     track_start(book, market, a["ticker"], a["lv"], a["bar"], now, a.get("grade") or "높음")
                 log(f"알림 보냄 → {a['key']}")
@@ -1525,6 +1555,8 @@ def main():
     if app and not app.get("error"):
         for a in app_items:                       # 앱에 저장된 것만 '보냄'으로 기록 (실패하면 다음에 다시)
             state[a["akey"]] = now.isoformat()
+            if a["side"] == "sell":
+                sell_mark(book, a["akey"], a["price"], now)
     save_state(state, now)
     hold_note = ""
     try:                                          # 앱 '보유' 탭 분석 (알림을 다 보낸 뒤)

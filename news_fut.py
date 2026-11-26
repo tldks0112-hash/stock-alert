@@ -341,13 +341,14 @@ def hilo(df, market, today):
     c = df["Close"].dropna()
     if len(c) < 200 or pd_day(c.index[-1]) != today:
         return None
-    hi, lo = df["High"].reindex(c.index).fillna(c), df["Low"].reindex(c.index).fillna(c)
-    prev_hi, prev_lo = float(hi.iloc[-253:-1].max()), float(lo.iloc[-253:-1].min())
+    # 종가 기준 (장중 고가·저가는 가끔 튀는 값이 섞여서, 1년 종가 최고·최저를 넘었을 때만)
+    prev = c.iloc[-253:-1]
+    last = float(c.iloc[-1])
     chg = round(float(c.iloc[-1] / c.iloc[-2] - 1) * 100, 2)
-    if float(hi.iloc[-1]) > prev_hi:
-        return "hi", chg, float(c.iloc[-1])
-    if float(lo.iloc[-1]) < prev_lo:
-        return "lo", chg, float(c.iloc[-1])
+    if last > float(prev.max()):
+        return "hi", chg, last
+    if last < float(prev.min()):
+        return "lo", chg, last
     return None
 
 
