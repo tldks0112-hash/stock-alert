@@ -12,7 +12,7 @@
     return LEGAL.advisorNo ? '유사투자자문업자(신고번호 ' + LEGAL.advisorNo + ')로 정식 금융투자업자가 아니에요. 개별 상담과 자금 운용은 하지 않으며, 원금 손실이 생길 수 있어요.'
       : '투자 참고용 정보이며 투자자문이 아니에요. 원금 손실이 생길 수 있고, 투자 판단과 책임은 본인에게 있어요.';
   }
-  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping' };
+  var K = { consent: 'tn_consent_v1', code: 'tn_code', prefs: 'tn_prefs', push: 'tn_push', feed: 'tn_feed', jr: 'tn_journal', briefHide: 'tn_brief_hide', hold: 'tn_hold', hind: 'tn_hold_ind', broker: 'tn_broker', htrack: 'tn_hold_track', nseen: 'tn_notice_seen', devkey: 'tn_dev_key', moversHide: 'tn_movers_hide', recapHide: 'tn_recap_hide', pa: 'tn_price_alerts', theme: 'tn_theme', wallSeen: 'tn_wall_seen', lping: 'tn_login_ping', onb: 'tn_onboarded' };
   var MARKET = { kr: '국장', us: '미장', crypto: '코인' };
   var MISS = { '시장약세': '시장 흐름 약함', '추세약세': '종목 추세 약함', '이미오름': '이미 많이 오름', '변동큼': '변동성 큼',
     '실적임박': '실적 발표 임박', '기록부족': '과거 기록 부족', '과거손실': '과거 성적 손실', '🟢연속손실': '최근 연속 손실' };
@@ -689,7 +689,8 @@
         '<button data-act="padel" data-v="' + a.id + '" aria-label="가격 알림 지우기">' + ICON.x + '</button></span>';
     }).join('');
     if (S.paopen === h.id) return '<div class="parow">' + chips + '</div>' + paForm(h, an);
-    return '<div class="parow">' + chips + '<button class="pa add" data-act="paopen" data-v="' + esc(h.id) + '">+ 가격 알림</button></div>';
+    var rec = h.avg > 0 && +h.qty > 0 && price && !mine.some(function (a) { return !a.fired_at; }) ? '<button class="pa rec" data-act="parec" data-v="' + esc(h.id) + '">⚡ 평단 기준 손절 -10% · 목표 +20% 한 번에 걸기</button>' : '';
+    return '<div class="parow">' + chips + '<button class="pa add" data-act="paopen" data-v="' + esc(h.id) + '">+ 가격 알림</button>' + rec + '</div>';
   }
   function paForm(h, an) {
     if (!LIVE) return '<p class="small pabox">앱 연결이 끝나면 쓸 수 있어요.</p>';
@@ -917,11 +918,14 @@
       return '<button class="' + (on ? 'on' : '') + '" data-act="hind" data-v="' + q[0] + '" aria-pressed="' + on + '">' + q[1] + '</button>';
     }).join('') + '</div>';
     var held = list.filter(function (h) { return +h.qty > 0; }), watch = list.filter(function (h) { return !(+h.qty > 0); });
-    var tot = { kr: [0, 0, 0], us: [0, 0, 0] };
-    held.forEach(function (h) { var a = an[h.yt]; if (a && a.ok && h.avg > 0) { var k = h.market === 'us' ? 'us' : 'kr'; tot[k][0] += a.price * h.qty; tot[k][1] += (a.price - h.avg) * h.qty; tot[k][2] += h.avg * h.qty; } });
+    var tot = { kr: [0, 0, 0, 0], us: [0, 0, 0, 0] };
+    held.forEach(function (h) { var a = an[h.yt]; if (a && a.ok && h.avg > 0) { var k = h.market === 'us' ? 'us' : 'kr'; tot[k][0] += a.price * h.qty; tot[k][1] += (a.price - h.avg) * h.qty; tot[k][2] += h.avg * h.qty;
+      if (a.chg != null) tot[k][3] += a.price * h.qty * (1 - 1 / (1 + a.chg / 100)); } });
     var sumRow = function (k, label) {
       var t = tot[k]; if (!t[0]) return '';
-      return '<div class="sumrow"><span>' + label + '</span><strong data-roll="sum:' + k + '">' + amt(k, t[0]).replace('+', '') + '</strong><b class="' + tone(t[1]) + '" data-roll="sumpl:' + k + '">' + amt(k, t[1]) + ' (' + pct(t[2] ? t[1] / t[2] * 100 : 0) + ')</b></div>';
+      var base = t[0] - t[3];
+      return '<div class="sumrow"><span>' + label + '</span><strong data-roll="sum:' + k + '">' + amt(k, t[0]).replace('+', '') + '</strong><b class="' + tone(t[1]) + '" data-roll="sumpl:' + k + '">' + amt(k, t[1]) + ' (' + pct(t[2] ? t[1] / t[2] * 100 : 0) + ')</b></div>' +
+        (t[3] ? '<div class="sumday"><span>오늘</span><b class="' + tone(t[3]) + '">' + amt(k, t[3]) + ' (' + pct(base ? t[3] / base * 100 : 0) + ')</b></div>' : '');
     };
     var sum = tot.kr[0] || tot.us[0] ? '<section class="card sumcard"><h2 style="font-size:15px">내 평가 금액</h2>' + sumRow('kr', '원화') + sumRow('us', '달러') + '</section>' : '';
     var card = function (h) { return holdCard(h, an[h.yt], prob, NW[h.yt]); };
@@ -1469,6 +1473,11 @@
   }
   function tLabel(iso) { var d = dayLabel(iso); return (d === '오늘' ? '' : d + ' ') + hm(iso); }
   function groupCard(g) { return card(g[0], g); }
+  function resLine(a, big) {               // 알림 뒤 결과 (알림 때 가격 대비)
+    var r = a.res; if (!r || r.now == null) return '';
+    var f = function (v) { return '<b class="' + tone(v) + '">' + pct(v) + '</b>'; };
+    return '<div class="resl' + (big ? ' big' : '') + '"><span>알림 뒤</span><span>최고 ' + f(r.hi) + '</span><span>최저 ' + f(r.lo) + '</span><span>지금 ' + f(r.now) + '</span></div>';
+  }
   function card(a, g) {
     var m = a.market, buy = a.side === 'buy', vals, foot;
     if (buy) {
@@ -1485,7 +1494,7 @@
       return '<i class="' + (x.side === 'buy' ? 'b' : 's') + '">' + esc(tLabel(x.created_at)) + ' ' + (x.side === 'buy' ? '매수' : '매도') + '</i>'; }).join('') + (g.length > 5 ? '<i>외 ' + (g.length - 5) + '</i>' : '') + '</div>' : '';
     return '<a class="card' + (!buy && heldBy(a) ? ' held' : '') + (fresh ? ' fresh' : '') + '" href="#/alert/' + esc(a.id) + '"><div class="head"><div class="title"><div class="name"><span class="side ' + (buy ? 'buy">매수' : 'sell">매도') + '</span>' + esc(a.name) + (heldBy(a) ? '<span class="mine">보유</span>' : '') + (extTag(a) ? '<span class="mine ext">' + extTag(a) + '</span>' : '') + '</div><span class="small">' + esc(where(a)) + '</span></div>' + chip(a) + '</div>' +
       '<div class="vals">' + vals.map(function (v) { return '<div><span>' + v[0] + '</span><strong class="' + v[2] + '">' + esc(v[1]) + '</strong></div>'; }).join('') + '</div>' +
-      '<span class="foot">' + esc(foot) + '</span>' + times + '</a>';
+      '<span class="foot">' + esc(foot) + '</span>' + resLine(a) + times + '</a>';
   }
 
   // ---------- 화면 ----------
@@ -1622,7 +1631,7 @@
       var ok = D[q[0]] && D[q[0]].length > 1, on = q[0] === tf;
       return '<button role="tab" data-act="ctf" data-id="' + esc(a.id) + '" data-v="' + q[0] + '" class="' + (on ? 'on' : '') + '" aria-selected="' + on + '"' + (ok ? '' : ' disabled') + '>' + q[1] + '</button>';
     }).join('') + '</div>';
-    return '<div class="chead"><span class="small">지금</span><b>' + money(m, last) + '</b><span class="' + tone(vs) + '">알림 때보다 ' + pct(vs) + '</span></div>' +
+    return '<div class="chead"><span class="small">지금</span><b>' + money(m, last) + '</b><span class="' + tone(vs) + '">알림 때보다 ' + pct(vs) + '</span></div>' + resLine(a, true) +
       '<div class="chart" data-chart="1"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(TF.filter(function (q) { return q[0] === tf; })[0][1] + ' 차트, 알림 지점 표시') + '">' +
       '<defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="cg0 ' + cls + '"/><stop offset="1" class="cg1"/></linearGradient></defs>' +
       lines + '<path class="carea" d="' + area + '" fill="url(#cg)"/><path class="cline ' + cls + '" d="' + line + '"/>' + marks + '<g class="cx">' + xl + '</g>' +
@@ -1930,6 +1939,35 @@
       setTimeout(function () { var c = w.querySelector('button[data-v="0"]'); if (c) try { c.focus(); } catch (_) {} }, 60);
     });
   }
+  function onboarding() {                // 처음 쓰는 사람: 3장짜리 짧은 안내 (넘기거나 건너뛸 수 있음)
+    if (document.querySelector('.onb-wrap')) return;
+    var P = [
+      [ICON.list, '타점이 생기면 알려 드려요', '매수 알림에는 <b>매수 기준가 · 손절가 · 매도가</b>가 같이 와요. 카드를 누르면 분·시·일·월 차트에서 알림이 온 지점을 볼 수 있어요.'],
+      [ICON.wallet, '가진 종목을 넣어 두세요', '<b>보유</b> 탭에 종목과 수량을 넣으면 점수·뉴스·가격 알림을 한곳에서 봐요. 로그인하면 휴대폰을 바꿔도 그대로예요.'],
+      [ICON.bell, '알림을 켜 주세요', '받을 시장과 알림 종류, 방해 금지 시간은 <b>설정</b>에서 언제든 바꿀 수 있어요.']];
+    var w = document.createElement('div'); w.className = 'onb-wrap'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-label', '타점노트 안내');
+    w.innerHTML = '<div class="onb"><button type="button" class="onb-skip" data-o="skip">건너뛰기</button><div class="onb-track">' + P.map(function (q) {
+      return '<section class="onb-p"><div class="onb-ic" aria-hidden="true">' + q[0] + '</div><h2>' + q[1] + '</h2><p>' + q[2] + '</p></section>'; }).join('') +
+      '</div><div class="onb-dots">' + P.map(function (_, i) { return '<i data-i="' + i + '"></i>'; }).join('') + '</div><button type="button" class="btn onb-next" data-o="next">다음</button></div>';
+    document.body.appendChild(w);
+    var i = 0, tr = w.querySelector('.onb-track'), nx = w.querySelector('.onb-next');
+    var go = function (k) {
+      i = Math.max(0, Math.min(P.length - 1, k)); tr.style.transform = 'translateX(' + (-i * 100) + '%)';
+      [].forEach.call(w.querySelectorAll('.onb-dots i'), function (d, j) { d.classList.toggle('on', j === i); });
+      nx.textContent = i === P.length - 1 ? (pushOn() ? '시작하기' : '알림 켜고 시작') : '다음';
+    };
+    var done = function (push) { store.set(K.onb, true); w.classList.remove('in'); setTimeout(function () { w.remove(); }, 220); if (push && LIVE && !pushOn()) enablePush(); };
+    w.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-o],[data-i]'); if (!b) return;
+      if (b.getAttribute('data-o') === 'skip') done(false);
+      else if (b.getAttribute('data-o') === 'next') { if (i < P.length - 1) go(i + 1); else done(true); }
+      else go(+b.getAttribute('data-i'));
+    });
+    var x0 = null;
+    tr.addEventListener('touchstart', function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+    tr.addEventListener('touchend', function (e) { if (x0 == null) return; var dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 40) go(i + (dx < 0 ? 1 : -1)); });
+    go(0); requestAnimationFrame(function () { w.classList.add('in'); });
+  }
   function netBar() {                    // 인터넷이 끊기면 위에 얇은 띠
     var b = document.getElementById('netbar');
     if (navigator.onLine === false) {
@@ -2061,7 +2099,7 @@
     }
   }
   var ACT = {
-    start: function () { S.agreedNow = true; S.agree = S.agree.map(function () { return false; }); store.set(K.consent, true); render(); if (!LIVE || code()) loadFeed(); },
+    start: function () { S.agreedNow = true; S.agree = S.agree.map(function () { return false; }); store.set(K.consent, true); render(); if (!LIVE || code()) loadFeed(); if (!store.get(K.onb, false)) setTimeout(onboarding, 350); },
     tab: function (t) { S.tab = t.dataset.v; render(); },
     rec: function (t) { S.rec = t.dataset.v; render(); },
     span: function (t) { S.liveSpan = t.dataset.v; render(); },
@@ -2084,6 +2122,32 @@
       de.classList.add('vt-theme');
       var done = function () { de.classList.remove('vt-theme'); };
       try { document.startViewTransition(go).finished.then(done, done); } catch (_) { done(); go(); }
+    },
+    parec: function (t) {                // 평단 기준 추천 가격 알림 두 개를 한 번에
+      var h = holds().filter(function (x) { return x.id === t.dataset.v; })[0], an = h && S.han && S.han.data && S.han.data.an && S.han.data.an[h.yt];
+      if (!h || !(h.avg > 0)) return;
+      if (!pushOn()) { S.paopen = h.id; render(); return; }
+      var m = h.market, cur = an && an.ok ? an.price : null;
+      var rd = function (v) { return m === 'us' ? Math.round(v * 100) / 100 : v >= 1000 ? Math.round(v / 10) * 10 : Math.round(v * 100) / 100; };
+      var stop = rd(h.avg * 0.9), goal = rd(h.avg * 1.2), sets = [];
+      if (!cur || stop < cur) sets.push(['down', stop]);
+      if (!cur || goal > cur) sets.push(['up', goal]); else sets.push(['up', rd(cur * 1.1)]);
+      if (!sets.length) return;
+      t.disabled = true; t.innerHTML = '<span class="spin" aria-hidden="true"></span>거는 중';
+      var made = [];
+      myEndpoint().then(function (ep) {
+        if (!ep) throw new Error('push off');
+        return sets.reduce(function (pr, q) {
+          return pr.then(function () { return rpc('app_price_set', { p_code: code(), p_endpoint: ep, p_yt: h.yt, p_market: m, p_name: h.name, p_kind: q[0], p_price: q[1] }).then(function (l) { paSet(l); made.push(q); }); });
+        }, Promise.resolve()).then(function () { return ep; });
+      }).then(function (ep) {
+        render();
+        toast(made.map(function (q) { return (q[0] === 'up' ? '목표 ' : '손절 ') + money(m, q[1]); }).join(' · ') + ' 알림을 걸었어요', { kind: 'ok', action: '되돌리기', onAction: function () {
+          var ids = paList().filter(function (a) { return a.yt === h.yt && !a.fired_at && made.some(function (q) { return q[0] === a.kind && +q[1] === +a.price; }); }).map(function (a) { return a.id; });
+          ids.reduce(function (pr, id) { return pr.then(function () { return rpc('app_price_del', { p_code: code(), p_endpoint: ep, p_id: id }).then(paSet); }); }, Promise.resolve())
+            .then(function () { render(); toast('되돌렸어요', { kind: 'ok' }); }).catch(paErr);
+        } });
+      }).catch(function (e) { paErr(e); render(); });
     },
     paopen: function (t) { S.paopen = t.dataset.v; S.pakind = 'up'; S.paval = ''; render(); },
     paclose: function () { S.paopen = null; S.paval = ''; render(); },
