@@ -597,6 +597,271 @@ def mine_close_job(rt, book, now):
             pass
     return sent
 
+
+# ---------- 어제 보유 종목 핵심 뉴스 → 시안님 카톡 (아침 한 번) ----------
+# 기사 제목이 비슷한 것끼리 묶고, 여러 언론사가 같이 다룬 일(묶음이 큰 것) + 실적·수주·공시 같은 말이 들어간 것을 핵심으로 골라요.
+# 종목 이름·기사 제목은 카톡에만 가고, 공개 기록에는 개수만 남겨요.
+DIGEST_WIN = (7 * 60 + 30, 10 * 60)      # 한국 시간 07:30 ~ 10:00 사이 하루 한 번
+DIGEST_MAX = 8                            # 카톡으로 보낼 종목 수 (뉴스 많은 순)
+DIGEST_ON = True
+NOISE = re.compile(r"(포토|사진|영상|그래픽|인사\]|부고|모집|광고|운세|마감\s?시황|장\s?마감|개장\s?시황|오늘의\s?(증시|공시)|주요\s?공시|특징주\s?모음|증시\s?요약|"
+                   r"이\s?시각|랭킹|TOP\s?\d+|순매수\s?상위|거래대금\s?상위|상승률\s?상위|급등주\s?정리|테마주\s?정리|종목\s?정리)", re.I)
+KEYS = re.compile(r"(실적|영업이익|영업익|매출|순이익|어닝|가이던스|전망치|수주|계약|공급|인수|합병|M&A|분할|상장|유상증자|무상증자|자사주|소각|배당|목표\s?주?가|"
+                  r"투자의견|상향|하향|승인|허가|FDA|임상|특허|소송|제재|규제|관세|리콜|파업|증설|신제품|출시|최대|최초|단독|급등|급락|신고가|신저가|"
+                  r"earnings|guidance|upgrade|downgrade|acquir|merger|deal|contract|approv|lawsuit|recall|record|forecast)", re.I)
+TAGS = re.compile(r"^\s*(\[[^\]]{0,14}\]|【[^】]{0,14}】|\([^)]{0,8}\))\s*")
+
+
+def _plain(t):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", t or ""))).strip()
+
+
+def _when(s):
+    try:
+        return parsedate_to_datetime(s or "").astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def wide_naver(q, since, now):
+    """네이버 뉴스: 관련도순 100개 + 최신순 50개를 합쳐 기간 안 기사만 (요약문 포함)"""
+    out, seen = [], set()
+    for sort, n in (("sim", 100), ("date", 50)):
+        try:
+            r = requests.get(NAVER_URL, params={"query": q, "display": n, "sort": sort}, timeout=12,
+                             headers={"X-NCP-APIGW-API-KEY-ID": NAVER_ID, "X-NCP-APIGW-API-KEY": NAVER_KEY})
+            r.raise_for_status()
+            items = r.json().get("items") or []
+        except Exception:
+            continue
+        for it in items:
+            orig, nlink = (it.get("originallink") or "").strip(), (it.get("link") or "").strip()
+            link = orig if orig.startswith("https://") else nlink if nlink.startswith("https://") else ""
+            title, at = _plain(it.get("title")), _when(it.get("pubDate"))
+            if not title or not at or not (since <= at <= now + timedelta(minutes=10)):
+                continue
+            k = re.sub(r"[\W_]+", "", title)[:50]
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append({"t": title, "d": _plain(it.get("description")), "s": _host(orig or link), "u": link, "at": at})
+    return out
+
+
+def wide_google(q, lang, since, now):
+    """구글 뉴스 (네이버 키가 없거나 영어 이름일 때) — 요약문은 없음"""
+    loc = "hl=ko&gl=KR&ceid=KR:ko" if lang == "ko" else "hl=en-US&gl=US&ceid=US:en"
+    try:
+        r = requests.get(f"https://news.google.com/rss/search?q={quote(q)}&{loc}", headers=UA, timeout=12)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+    except Exception:
+        return []
+    out, seen = [], set()
+    for it in root.iter("item"):
+        src_el = it.find("source")
+        src = (src_el.text or "").strip() if src_el is not None else ""
+        title, at = _clean_title(it.findtext("title"), src), _when(it.findtext("pubDate"))
+        if not title or not at or not (since <= at <= now + timedelta(minutes=10)):
+            continue
+        k = re.sub(r"[\W_]+", "", title)[:50]
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append({"t": title, "d": "", "s": src[:40] or _host(it.findtext("link") or ""), "u": (it.findtext("link") or "")[:600], "at": at})
+        if len(out) >= 80:
+            break
+    return out
+
+
+def _bi(t, drop):
+    t = TAGS.sub("", t)
+    t = re.sub(r"\[[^\]]{0,14}\]|\([^)]{0,14}\)", " ", t).lower()
+    for w in drop:
+        if w:
+            t = t.replace(w.lower(), " ")
+    t = re.sub(r"[\W_]+", "", t)
+    return {t[i:i + 2] for i in range(len(t) - 1)} or {t}
+
+
+def _jac(a, b):
+    return len(a & b) / max(1, len(a | b))
+
+
+def _short(t, names, n=44):
+    t = TAGS.sub("", TAGS.sub("", t)).strip(" -·,")
+    for w in names:                                  # 맨 앞 종목 이름은 머리말에 있으니 뺌 (남는 게 너무 짧으면 둠)
+        if w and t.startswith(w):
+            rest = re.sub(r"^[\s,·:…\-]+", "", t[len(w):])
+            if len(rest) >= 10:
+                t = rest
+            break
+    return t if len(t) <= n else t[: n - 1].rstrip() + "…"
+
+
+def key_news(arts, names):
+    """기사들 → 핵심 묶음 [(점수, 대표 기사, 언론사 수)] 점수 높은 순"""
+    low = [re.sub(r"\s+", "", w).lower() for w in names if w]
+    def has(a, field):
+        x = re.sub(r"\s+", "", a[field]).lower()
+        return any(w in x for w in low)
+    arts = [a for a in arts if has(a, "t") or has(a, "d")]          # 이 종목 얘기가 아닌 기사는 뺌
+    arts.sort(key=lambda a: a["at"])
+    groups = []
+    for a in arts:
+        g = _bi(a["t"], names)
+        for c in groups:
+            if _jac(g, c["g"]) >= 0.3:
+                c["a"].append(a)
+                break
+        else:
+            groups.append({"g": g, "a": [a]})
+    out = []
+    for c in groups:
+        a = c["a"]
+        titled = [x for x in a if has(x, "t")]
+        pool = titled or a
+        if sum(1 for x in a if NOISE.search(x["t"])) * 2 >= len(a):
+            continue
+        srcs = len({x["s"] for x in a if x["s"]}) or len(a)
+        kw = any(KEYS.search(x["t"]) for x in a)
+        listy = max(len(re.findall(r"[·,]", x["t"])) for x in pool) >= 3
+        score = srcs + (1.0 if kw else 0) + (0.5 if any("단독" in x["t"][:8] for x in a) else 0) - (1.0 if listy else 0) - (0 if titled else 1.5)
+        if score < 1.5:
+            continue
+        gs = [_bi(x["t"], names) for x in pool]
+        cen = [sum(_jac(gs[i], gs[j]) for j in range(len(pool)) if j != i) for i in range(len(pool))]
+        top = max(cen)                                  # 묶음 한가운데에 가까운 제목 중 가장 먼저 나온 기사 (보통 첫 보도)
+        best = min((i for i in range(len(pool)) if cen[i] >= top * 0.75), key=lambda i: pool[i]["at"])
+        out.append((round(score, 2), pool[best], srcs))
+    out.sort(key=lambda x: (-x[0], -x[1]["at"].timestamp()))
+    return out
+
+
+def _lead(d, room):
+    """기사 요약문 → 첫 문장 (room 글자 안)"""
+    d = re.sub(r"^\s*\[[^\]]{0,20}\]\s*", "", d or "").strip()
+    m = re.search(r"^(.{12,}?(다|요|음|함)\.)\s", d + " ")
+    d = (m.group(1) if m else d).strip()
+    if room < 14 or len(d) < 15:
+        return ""
+    return d if len(d) <= room else d[: room - 1].rstrip() + "…"
+
+
+def digest_msg(rt, label, name, top):
+    """한 종목 카톡 한 통 (200자 안): 핵심 1~2개 + 첫 기사 한 줄 요약"""
+    head = f"📰 {label} · {name}"
+    nums = ["①", "②"]
+    for take, lead in ((2, True), (2, False), (1, True), (1, False)):
+        lines = [head]
+        for i, (_, a, n) in enumerate(top[:take]):
+            lines.append(f"{nums[i]} {_short(a['t'], [name])}" + (f" ({n}곳)" if n >= 2 else ""))
+            if i == 0 and lead:
+                lines.append("")                        # 자리
+        if lead:
+            room = 200 - rt.u16len("\n".join(lines)) - 2
+            ld = _lead(top[0][1].get("d"), min(room, 70))
+            if ld:
+                lines[2] = "  " + ld
+            else:
+                lines.pop(2)
+        msg = "\n".join(lines)
+        if rt.u16len(msg) <= 200:
+            return msg
+    return head[:200]
+
+
+def digest_job(rt, book, now):
+    """시안님 보유 종목(개발자 화면에서 연결한 계정)의 어제 핵심 뉴스 → 카톡 (아침 한 번)"""
+    if not DIGEST_ON or not rt.S.get("카톡_뉴스요약", True):
+        return None
+    pos = list(getattr(ab, "OWNER_POS", []) or [])
+    if not pos or getattr(rt, "MY_HOLD", None) is None:
+        return None
+    flags = book["flags"]
+    k = now.astimezone(rt.KST)
+    try:
+        force = (ab.get_kv("news_digest_now") or {}).get("go") is True
+    except Exception:
+        force = False
+    today = k.date().isoformat()
+    if not force:
+        if not (DIGEST_WIN[0] <= k.hour * 60 + k.minute < DIGEST_WIN[1]) or flags.get("digest_day") == today:
+            return None
+    flags["digest_day"] = today
+    try:
+        last = datetime.fromisoformat(flags.get("digest_at")) if flags.get("digest_at") else None
+    except (TypeError, ValueError):
+        last = None
+    since = max(now - timedelta(hours=72), min(now - timedelta(hours=12), last or now - timedelta(hours=26)))
+    flags["digest_at"] = now.isoformat()
+    if force:
+        try:
+            ab.put_kv("news_digest_now", {"go": False, "at": now.isoformat()})
+        except Exception:
+            pass
+    seen, uniq = set(), []
+    for p in pos:
+        if p["yt"] not in seen:
+            seen.add(p["yt"])
+            uniq.append(p)
+    names = _names(rt, [p["yt"] for p in uniq])
+
+    def one(p):
+        yt, m = p["yt"], p["market"]
+        nm, al = names.get(yt, (None, None))
+        nm = nm or p.get("name") or yt
+        if m == "crypto":
+            nm = nm if HANGUL.search(nm) else yt.replace("-KRW", "")
+        words = {nm.split()[0] if m == "us" else nm}
+        for w in (al or holdings.ALIAS.get(yt) or "").split()[:2]:
+            words.add(w)
+        try:
+            if NAVER_ID and NAVER_KEY:
+                q = naver_query(yt, m, nm, al)
+                arts = wide_naver(q, since, now) if q else []
+                words.add(q or "")
+                if not arts and m == "us":
+                    gq, lang = query_for(yt, m, nm, al)
+                    arts = wide_google(gq.replace("when:3d", "when:2d"), lang, since, now) if gq else []
+                    words.add(re.sub(r'"|when:\S+', "", gq or "").strip())
+            else:
+                gq, lang = query_for(yt, m, nm, al)
+                arts = wide_google(gq.replace("when:3d", "when:2d"), lang, since, now) if gq else []
+                words.add(re.sub(r'"|when:\S+', "", gq or "").strip())
+            if not arts and m == "us" and yt.isalpha() and len(yt) >= 3:     # 영어 이름 ETF 등: 종목 코드로 한 번 더
+                arts = wide_google(f'"{yt}" when:2d', "en", since, now)
+        except Exception:
+            arts = []
+        if m == "us" and yt.isalpha() and len(yt) >= 3:
+            words.add(yt)
+        return p, key_news(arts, [w for w in words if w and len(w) >= 2])
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        got = list(ex.map(one, uniq))
+    got = [(p, top) for p, top in got if top]
+    got.sort(key=lambda x: -sum(s for s, _, _ in x[1][:2]))
+    label = "어제 핵심 뉴스" if not force else "최근 24시간 핵심 뉴스"
+    tok = rt.base.get_access_token()
+    if not got:
+        rt.send_short(tok, f"📰 {label}\n보유 {len(uniq)}종목에 눈에 띄는 기사가 없었어요.")
+        return "뉴스 요약 카톡 0종목"
+    sent = 0
+    for p, top in got[:DIGEST_MAX]:
+        try:
+            rt.send_short(tok, digest_msg(rt, label, p.get("name") or p["yt"], top))
+            sent += 1
+        except Exception:
+            pass
+    rest = len(got) - DIGEST_MAX
+    if rest > 0:
+        try:
+            rt.send_short(tok, f"📰 그 밖에 {rest}종목 뉴스는 앱 보유 탭에서 볼 수 있어요.")
+        except Exception:
+            pass
+    return f"뉴스 요약 카톡 {sent}종목"
+
+
 def run(rt, book, now):
     """엔진 실행 끝에 호출 → 공개 기록용 짧은 요약 (개수만)"""
     if not ab.enabled():
@@ -620,6 +885,12 @@ def run(rt, book, now):
             notes.append("보유 마감 요약 카톡 " + "·".join(mc))
     except Exception as e:
         notes.append(f"보유 마감 요약 실패 ({type(e).__name__})")
+    try:
+        nd = digest_job(rt, book, now)
+        if nd:
+            notes.append(nd)
+    except Exception as e:
+        notes.append(f"뉴스 요약 실패 ({type(e).__name__})")
     try:
         rc = recap_job(rt, book, now)
         if rc:
