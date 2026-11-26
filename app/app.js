@@ -872,7 +872,7 @@
     var m = h.market, ok = an && an.ok, price = ok ? an.price : null;
     var pl = ok && h.avg > 0 ? price / h.avg - 1 : null, val = ok && h.qty > 0 ? price * h.qty : null;
     var open = S.hopen === h.id, B = BROKERS[m === 'crypto' ? broker().coin : broker().stock];
-    var name = '<div class="hname"><b class="name">' + esc(h.name) + '</b><span class="small">' + MARKET[m] + ' · ' + esc(h.code) + '</span></div>';
+    var name = '<div class="hname"><b class="name">' + esc(h.name) + '</b><span class="small">' + MARKET[m] + ' · ' + esc(h.code) + (h.src === 'toss' ? ' · <i class="srctag">토스 자동</i>' : '') + '</span></div>';
     if (!an) return '<section class="card hcard"><div class="hhead">' + name + '</div>' + (S.han && S.han.loading && !(S.han.data && S.han.data.an) ? '<div class="sk-lines" aria-hidden="true"><i class="sk w70"></i><i class="sk w40"></i></div>' : '<p class="small" style="margin:0">분석을 준비하고 있어요. 새 종목은 5분쯤 걸려요.</p>') + hButtons(h, B, open) + '</section>';
     if (!ok) return '<section class="card hcard"><div class="hhead">' + name + '</div><p class="small" style="margin:0">' + esc(an.err || '분석할 수 없어요') + '. 종목 코드를 확인해 주세요.</p>' + hButtons(h, B, open) + '</section>';
     var x = an.extra || {}, v = an.vals || {};
@@ -958,8 +958,33 @@
         '<section class="card"><details' + (S.hindOpen ? ' open' : '') + '><summary class="dsum">확률 계산에 쓸 지표 <small>' + sel.length + '개 선택</small></summary>' +
         '<p class="small" style="margin:8px 0 0">고른 지표가 지금과 같았던 날을 과거에서 찾아, 며칠 뒤 실제로 오른 비율을 보여 줘요. 많이 고를수록 비슷한 날이 줄어요.</p>' + chips + '</details></section>';
     return top('<span style="font-size:18px;font-weight:700">내 보유</span>', '<a class="btn small-btn" href="#/hold/add">+ 종목 추가</a>') + demoBar() +
-      '<main class="page">' + body +
+      '<main class="page">' + brokerBar() + body +
       paMeter() + '<p class="foot-note">국장 시세는 15~20분 늦을 수 있어요. 오른 비율은 같은 시장 종목들의 최근 5년 일봉에서 지표 상태가 지금과 같았던 날 이후의 실제 결과이고, 앞으로를 보장하지 않아요. ' + (session() ? '로그인해서 수량과 단가도 계정에 저장 중이에요.' : '수량과 단가는 이 휴대폰에만 저장되고, 서버에는 종목 코드만 보내요.') + '</p></main>' + menu('hold');
+  }
+  function brokerBar() {                  // 시안님 계정: 토스증권 보유 자동 반영 상태
+    if (!session()) return '';
+    if (!S.bstat || Date.now() - S.bstat.t > 60000) loadBroker();
+    var b = S.bstat && S.bstat.v;
+    if (!b || !b.owner || !b.at) return '';
+    var st = b.ok ? '<b>' + since(b.at) + ' 반영</b> · ' + (b.n || 0) + '종목' : '<b class="red-ink">' + esc(b.err || '가져오지 못했어요') + '</b>';
+    return '<section class="card bbar"><div><span class="small">토스증권 자동 반영</span><div class="bst">' + st + '</div>' +
+      '<p class="small" style="margin:4px 0 0">하루 4번 수량 · 평균 단가를 자동으로 맞춰요</p></div>' +
+      '<button class="btn ghost" data-act="bsync"' + (S.bwait ? ' disabled' : '') + '>' + (S.bwait ? '가져오는 중…' : '지금 가져오기') + '</button></section>';
+  }
+  function loadBroker() {
+    if (!LIVE || !session() || loadBroker.busy) return;
+    loadBroker.busy = true;
+    rpcAs('app_broker_status', {}).then(function (v) {
+      var old = S.bstat && S.bstat.v && S.bstat.v.at, prev = JSON.stringify((S.bstat && S.bstat.v) || null);
+      S.bstat = { t: Date.now(), v: v || null };
+      if (S.bwait && v && v.at && v.at !== old) {           // 요청한 반영이 끝남 → 계정 기록 다시 받기
+        S.bwait = false; clearInterval(loadBroker.poll);
+        pullAndMerge(false).then(function () { S.han = null; toast(v.ok ? '토스증권 보유를 반영했어요' : '가져오지 못했어요: ' + (v.err || ''), { kind: v.ok ? 'ok' : '' }); if (route().p === 'hold') render(); });
+        return;
+      }
+      if (route().p === 'hold' && JSON.stringify(v || null) !== prev) render();
+    }).catch(function () { S.bstat = { t: Date.now(), v: null }; })
+      .then(function () { loadBroker.busy = false; });
   }
   function pageHoldAdd() {
     var s = S.hsel;
@@ -2168,6 +2193,16 @@
     refresh: function () { if (!S.loading) { toast('새로 불러와요'); loadFeed(); } },
     push: function () { if (pushOn()) disablePush(); else enablePush(); },
     login: function (t) { signIn(t.dataset.v); },
+    bsync: function () {
+      rpcAs('app_broker_sync', {}).then(function (r) {
+        if (r === 'queued') {
+          S.bwait = true; toast('요청했어요. 5분 안에 반영돼요', { kind: 'ok' }); render();
+          clearInterval(loadBroker.poll);
+          var n = 0; loadBroker.poll = setInterval(function () { if (++n > 12) { clearInterval(loadBroker.poll); S.bwait = false; if (route().p === 'hold') render(); return; } if (S.bstat) S.bstat.t = 0; loadBroker(); }, 60000);
+        } else if (r === 'wait') toast('조금 전에 요청했어요. 잠시 뒤 다시 해 주세요');
+        else toast('이 계정은 증권사 연동이 없어요');
+      }).catch(function () { toast('요청하지 못했어요. 잠시 뒤 다시 해 주세요'); });
+    },
     lshare: function (t) {
       var u = shareUrl(), txt = '타점노트 · 국장·미장·코인 매수·매도 타점 알림 (무료 베타)\n링크를 열면 바로 휴대폰에 설치할 수 있어요.';
       var copyIt = function () {
@@ -2640,7 +2675,13 @@
   handleAuthReturn();
   setTimeout(function () { loadWall(false); }, 3000);
   setTimeout(function () { loadFbMine(false, false); }, 2500);
-  if (session()) setTimeout(function () { pullAndMerge(false).then(function () { if (route().p === 'hold' || route().p === 'settings') render(); }); loginLog('open'); }, 1500);
+  document.addEventListener('visibilitychange', function () {   // 다시 앱을 볼 때: 다른 기기 · 증권사 자동 반영 내용을 받아 옴 (3분에 한 번)
+    if (document.visibilityState !== 'visible' || !session() || Date.now() - (pullAndMerge.last || 0) < 180000) return;
+    pullAndMerge.last = Date.now();
+    var before = JSON.stringify(store.get(K.hold, []));
+    pullAndMerge(false).then(function () { if (JSON.stringify(store.get(K.hold, [])) !== before) { S.han = null; if (route().p === 'hold') render(); } });
+  });
+  if (session()) setTimeout(function () { pullAndMerge.last = Date.now(); pullAndMerge(false).then(function () { if (route().p === 'hold' || route().p === 'settings') render(); }); loginLog('open'); }, 1500);
   render();
   if (store.get(K.consent, false)) loadFeed();
   loadNotices();
