@@ -312,6 +312,8 @@ def main():
     state = load_state()
     posts = build_posts(items, state, now)
     print(f"[{now:%Y-%m-%d %H:%M} KST] 일정 {len(items)}개, 올릴 글 {len(posts)}개")
+    for it in sorted(items, key=lambda x: x["start"], reverse=True)[:5]:
+        print(f"  {it['start']}~{it['end']} {it['name']} | 확정 {it['fixed'] or '-'} | 희망 {it['band'] or '-'} | 경쟁률 {it['ratio'] or '-'}")
 
     posted = list(state.get("posted", []))
     for key, text in posts:
