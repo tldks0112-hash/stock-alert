@@ -12,12 +12,14 @@ import html
 import json
 import os
 import re
+import ssl
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 
 import requests
+import requests.adapters
 
 SRC_URL = "https://www.38.co.kr/html/fund/index.htm?o=k"
 SRC_BASE = "https://www.38.co.kr"
@@ -115,11 +117,31 @@ def clean(s):
     return "" if s in ("-", "", "0") else s
 
 
+class _OldTLS(requests.adapters.HTTPAdapter):
+    """38커뮤니케이션은 오래된 보안 방식(TLS)을 써서, 그 사이트에만 낮은 보안 단계를 허용해요."""
+
+    def init_poolmanager(self, *a, **kw):
+        ctx = ssl.create_default_context()
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+        kw["ssl_context"] = ctx
+        return super().init_poolmanager(*a, **kw)
+
+
+def _session():
+    s = requests.Session()
+    s.mount(SRC_BASE, _OldTLS())
+    return s
+
+
 def fetch():
     last = None
-    for i in range(3):
+    sess = _session()
+    for i in range(4):
+        url = SRC_URL if i % 2 == 0 else SRC_URL.replace("https://", "http://")
         try:
-            r = requests.get(SRC_URL, timeout=20, headers={
+            r = sess.get(url, timeout=20, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
                 "Accept-Language": "ko-KR,ko;q=0.9"})
@@ -132,8 +154,9 @@ def fetch():
                 return items
             last = "표를 찾지 못했어요 (페이지 모양이 바뀌었을 수 있어요)"
         except Exception as e:  # noqa: BLE001
-            last = repr(e)
-        time.sleep(5 * (i + 1))
+            last = f"{url[:5]} {e!r}"
+            print("읽기 재시도:", last[:200])
+        time.sleep(3 * (i + 1))
     raise RuntimeError(f"공모주 페이지 읽기 실패: {last}")
 
 
