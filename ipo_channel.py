@@ -278,9 +278,10 @@ def load_state():
 
 
 def main():
+    global DRY
     if not DRY and not (BOT and CHANNEL):
-        print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL 비밀값을 아직 안 넣어서 건너뛰어요.")
-        return
+        print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL 비밀값이 아직 없어서 글은 화면에만 보여 줄게요.")
+        DRY = True
     now = datetime.now(KST)
     if os.environ.get("NOW_KST"):            # 시험용 시각 바꾸기
         now = datetime.fromisoformat(os.environ["NOW_KST"]).replace(tzinfo=KST)
