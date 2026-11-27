@@ -45,6 +45,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f ipo_state.json ] || { echo "기록 파일 없음"; exit 0; }
           git add ipo_state.json
           if git diff --cached --quiet; then echo "바뀐 기록 없음"; exit 0; fi
           git commit -m "공모주 알림 기록"
