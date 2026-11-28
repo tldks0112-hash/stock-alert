@@ -1,0 +1,55 @@
+name: 영어 블로그 (미국 공모주·실적 일정)
+
+on:
+  schedule:
+    - cron: "13 12 * * *"   # 매일 한국 시간 밤 9:13 (미국 동부 아침 7:13)
+  workflow_dispatch:
+    inputs:
+      weekly:
+        description: "이번 주 일정 정리 글을 지금 올리기"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: en-blog
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 준비
+        run: pip install -q requests
+      - name: 글 쓰고 올리기
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          BLOGGER_BLOG_ID_EN: ${{ secrets.BLOGGER_BLOG_ID_EN }}
+          BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
+          BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          WEEKLY: ${{ inputs.weekly }}
+        run: python en_blog.py
+      - name: 올린 기록 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f en_blog_state.json ] || { echo "기록 파일 없음"; exit 0; }
+          git add en_blog_state.json
+          if git diff --cached --quiet; then echo "바뀐 기록 없음"; exit 0; fi
+          git commit -m "영어 블로그 기록"
+          for i in 1 2 3; do
+            git pull --rebase -q && git push && exit 0
+            sleep 5
+          done
+          echo "기록 저장 실패"; exit 1
+
+# ---- 파일 끝 ----
