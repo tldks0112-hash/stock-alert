@@ -8,7 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       weekly:
-        description: "주간 일정 글을 지금 바로 올리기 (아침 7~11시에만 동작)"
+        description: "주간 일정 글을 지금 바로 올리기"
+        type: boolean
+        default: false
+      intro:
+        description: "채널 소개 글 올리기 (처음 한 번)"
         type: boolean
         default: false
 
@@ -39,6 +43,7 @@ jobs:
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
           PROMO_TEXT: ${{ vars.IPO_PROMO_TEXT }}
           FORCE_WEEKLY: ${{ inputs.weekly }}
+          INTRO_POST: ${{ inputs.intro }}
         run: python ipo_channel.py
 
       - name: 올린 기록 저장

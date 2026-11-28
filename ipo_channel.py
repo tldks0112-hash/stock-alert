@@ -30,6 +30,7 @@ BOT = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "").strip()
 DRY = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 FORCE_WEEKLY = os.environ.get("FORCE_WEEKLY", "") not in ("", "0", "false")
+INTRO = os.environ.get("INTRO_POST", "") not in ("", "0", "false")
 PROMO = os.environ.get("PROMO_TEXT", "").strip()   # 월요일 일정 글 아래에 붙일 홍보 한 줄 (비워 두면 안 붙여요)
 
 FOOT = "\n\n<i>※ 투자 권유가 아니에요. 일정·가격은 바뀔 수 있어요. 출처: 38커뮤니케이션</i>"
@@ -208,8 +209,24 @@ def build_posts(items, state, now):
 
     morning = 7 <= now.hour < 11
 
+    # 0) 처음 한 번: 채널 소개 + 앞으로 2주 일정 (시험 실행에서 켜요)
+    if INTRO:
+        soon = sorted((it for it in items if today <= date.fromisoformat(it["end"])
+                       and date.fromisoformat(it["start"]) <= today + timedelta(days=14)),
+                      key=lambda x: (x["start"], x["name"]))
+        text = ("📌 <b>공모주 청약 알림 채널</b>\n\n"
+                "매일 자동으로 알려드려요.\n"
+                "• 아침 8시: 오늘 청약 시작·마감 종목\n"
+                "• 월요일 아침: 이번 주·다음 주 청약 일정\n"
+                "• 수시로: 새 공모주 일정, 공모가 확정, 청약 경쟁률")
+        if soon:
+            text += "\n\n<b>[앞으로 2주 청약 일정]</b>\n" + "\n\n".join(block(it) for it in soon)
+        if PROMO:
+            text += f"\n\n{PROMO}"
+        add("intro", text + FOOT)
+
     # 1) 월요일 아침: 이번 주·다음 주 일정
-    if morning and (today.weekday() == 0 or FORCE_WEEKLY):
+    if (morning and today.weekday() == 0) or FORCE_WEEKLY:
         mon = today - timedelta(days=today.weekday())
         groups = []
         for label, a, b in (("이번 주", mon, mon + timedelta(days=6)),
