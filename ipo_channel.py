@@ -333,10 +333,13 @@ def main():
         print(f"  {it['start']}~{it['end']} {it['name']} | 확정 {it['fixed'] or '-'} | 희망 {it['band'] or '-'} | 경쟁률 {it['ratio'] or '-'}")
 
     posted = list(state.get("posted", []))
+    failed = 0
     for key, text in posts:
         if all(send(part) for part in chunks(text)):
             posted.append(key)
             print("올림:", key)
+        else:
+            failed += 1
         time.sleep(1)
 
     keep_from = (now.date() - timedelta(days=60)).isoformat()
@@ -352,6 +355,9 @@ def main():
     if not DRY or os.environ.get("SAVE_STATE"):
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=1)
+    if failed:
+        print(f"⚠️ 글 {failed}개를 못 올렸어요. TELEGRAM_CHANNEL 값과 봇 관리자 권한을 확인해 주세요.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
