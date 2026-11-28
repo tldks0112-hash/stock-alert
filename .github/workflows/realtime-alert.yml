@@ -63,6 +63,12 @@ jobs:
           TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}             # 토스증권 보유 자동 반영 (없으면 안 씀)
           TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
           FIXIE_URL: ${{ secrets.FIXIE_URL }}                       # 고정 IP 중계 (토스 허용 IP)
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}                   # 한국투자 데이마켓 가격 (없으면 안 씀)
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          UPBIT_ACCESS_KEY: ${{ secrets.UPBIT_ACCESS_KEY }}         # 업비트 보유 자동 반영 (없으면 안 씀)
+          UPBIT_SECRET_KEY: ${{ secrets.UPBIT_SECRET_KEY }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}           # 바이낸스 보유 자동 반영 (없으면 안 씀)
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}                 # 의견 답글 메일 (없으면 앱에서만 보임)
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python realtime_alert.py
