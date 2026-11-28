@@ -284,6 +284,8 @@ def send(text):
             if r.ok:
                 return True
             print("텔레그램 오류:", r.status_code, r.text[:300])
+            if "chat not found" in r.text:
+                hint_chats()
             if r.status_code == 429:
                 time.sleep(int(r.json().get("parameters", {}).get("retry_after", 5)) + 1)
                 continue
@@ -292,6 +294,30 @@ def send(text):
             print("텔레그램 연결 오류:", repr(e))
             time.sleep(3)
     return False
+
+
+def hint_chats():
+    """채널을 못 찾을 때: 봇이 관리자로 들어간 채널 목록을 보여 줘요 (공개 정보만)."""
+    v = CHANNEL
+    print(f"넣은 채널 값 모양: 길이 {len(v)}, @로 시작 {v.startswith('@')}, 빈칸 {v != v.strip() or ' ' in v}, "
+          f"t.me 포함 {'t.me' in v}")
+    try:
+        me = requests.get(f"https://api.telegram.org/bot{BOT}/getMe", timeout=15).json().get("result", {})
+        print("봇 아이디:", "@" + str(me.get("username")))
+        ups = requests.get(f"https://api.telegram.org/bot{BOT}/getUpdates", timeout=15,
+                           params={"allowed_updates": json.dumps(["my_chat_member", "channel_post"])}).json()
+        found = {}
+        for u in ups.get("result", []):
+            c = (u.get("my_chat_member") or u.get("channel_post") or {}).get("chat") or {}
+            if c.get("type") == "channel":
+                st = ((u.get("my_chat_member") or {}).get("new_chat_member") or {}).get("status", "")
+                found[c["id"]] = (c.get("title"), c.get("username"), st)
+        if not found:
+            print("봇이 들어간 채널 기록이 없어요. 채널 관리자에 봇을 넣었는지 확인해 주세요.")
+        for cid, (t, un, st) in found.items():
+            print(f"봇이 들어간 채널: 이름 '{t}', 주소 {'@' + un if un else '(비공개)'}, 숫자 ID {cid}, 봇 상태 {st}")
+    except Exception as e:  # noqa: BLE001
+        print("채널 확인 실패:", repr(e))
 
 
 def chunks(text, limit=3900):
