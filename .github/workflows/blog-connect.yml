@@ -1,0 +1,45 @@
+name: 블로그 연결 (처음 한 번)
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "구글 동의 후 주소창의 주소 전체 (http://localhost/?code=... 로 시작)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  connect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 준비
+        run: pip install -q requests
+
+      - name: 구글 토큰 받고 블로그 확인
+        env:
+          BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
+          BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
+          BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
+          CODE: ${{ inputs.code }}
+          NEW_REFRESH_TOKEN_FILE: ${{ runner.temp }}/blogger_refresh_token
+        run: python blog_post.py connect
+
+      - name: 토큰을 GitHub 비밀값으로 저장
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/blogger_refresh_token
+        run: |
+          test -s "$TOKEN_FILE" || { echo "구글 토큰을 받지 못했어요."; exit 1; }
+          gh secret set BLOGGER_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"
+          rm -f "$TOKEN_FILE"
+          echo "연결 완료! 이제 매일 오전 10시쯤 블로그 글이 올라가요."
+
+# ---- 파일 끝 ----
