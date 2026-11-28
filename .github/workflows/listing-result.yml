@@ -1,0 +1,51 @@
+name: 공모주 상장 결과 (텔레그램 + 블로그)
+
+on:
+  schedule:
+    - cron: "25 23 * * 0-4"   # 평일 한국 시간 아침 8:25 — 오늘 상장 종목
+    - cron: "45 7 * * 1-5"    # 평일 오후 4:45 — 상장 첫날 결과, 블로그 월간 정리
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: listing-result
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 준비
+        run: pip install -q requests
+      - name: 상장 결과 확인하고 올리기
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+          BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
+          BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
+          BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+        run: python listing_result.py
+      - name: 올린 기록 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f listing_state.json ] || { echo "기록 파일 없음"; exit 0; }
+          git add listing_state.json
+          if git diff --cached --quiet; then echo "바뀐 기록 없음"; exit 0; fi
+          git commit -m "상장 결과 기록"
+          for i in 1 2 3; do
+            git pull --rebase -q && git push && exit 0
+            sleep 5
+          done
+          echo "기록 저장 실패"; exit 1
+
+# ---- 파일 끝 ----
