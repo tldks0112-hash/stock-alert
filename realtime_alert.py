@@ -1606,6 +1606,22 @@ def to_app(alerts, book, now):
         return {"error": f"{step}: {app_bridge.why(e)}"}
 
 
+def refresh_regimes(book, now, scanned):
+    """이번에 확인하지 않은 시장(주말 · 밤)의 지수 추세를 6시간마다 다시 계산 (지수 몇 개만 받음)"""
+    reg = book["flags"].setdefault("regime", {})
+    for mk in ("kr", "us", "crypto"):
+        if mk in scanned:
+            continue
+        cur = reg.get(mk) or {}
+        if cur.get("at", "") >= (now - timedelta(hours=6)).isoformat():
+            continue
+        daily = fetch_many(mc.regime_tickers(mk), "2y", "1d")
+        R = mc.regime(daily, mk, now)
+        if R:
+            reg[mk] = {**R, "at": now.isoformat()}
+            log(f"[{mk}] 시장 추세 (장 밖): {mc.STATE_KO[R['st']]}")
+
+
 def track_breakouts(alerts, book, now):
     """거래량 동반 돌파로 나간 매수 알림은 다음 날까지 지켜봄 (다시 저항선 아래로 오면 취소 알림)"""
     brk = book["flags"].setdefault("brk", {})
@@ -1716,6 +1732,10 @@ def main():
         stats["markets"] += 1
         scanned.append(market)
         scan_market(market, with_my_hold(market, cats), now, force, state, alerts, stats, card, book, notices)
+    try:                                          # 장이 닫힌 시장도 앱 '시장 추세' 카드에 보이게 (6시간마다)
+        refresh_regimes(book, now, scanned)
+    except Exception as e:
+        log(f"시장 추세 새로 고침 실패 ({type(e).__name__})")
 
     # 주인 없는 오래된 기록 정리 (종목을 설정에서 뺀 경우 등)
     old = pd.Timestamp(now) - pd.Timedelta(days=RUN_DAYS + 20)
