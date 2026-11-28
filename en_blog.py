@@ -220,6 +220,8 @@ def main():
 
     # 1) weekly roundups (Monday)
     mon = today - timedelta(days=today.weekday())
+    if today.weekday() >= 5:                      # 주말에는 다음 주 일정을 정리해요
+        mon += timedelta(days=7)
     if (today.weekday() == 0 or WEEKLY) and f"ipo:{mon}" not in weekly:
         t, b, l = weekly_ipo_post(items, mon)
         publish(tok, t, b, l); weekly.append(f"ipo:{mon}"); print("weekly ipo:", t)
