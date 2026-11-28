@@ -41,6 +41,11 @@ import yfinance as yf
 
 import app_bridge
 import holdings
+import market_ctx as mc
+try:
+    import signal_stats
+except ImportError:                               # 파일을 아직 안 올렸으면 건너뜀
+    signal_stats = None
 import news_fut
 try:                                   # 가격 알림 파일을 아직 안 올렸어도 엔진은 그대로 돌게
     import price_watch
@@ -97,12 +102,15 @@ MY_HOLD = None                                  # 실행할 때 앱 서버에서
 KAKAO_ONLY = set()                              # 감시 목록에 없고 내 보유에만 있는 종목 → 카톡만 (앱 피드엔 안 올림)
 CHART_SET = set()                               # 최근 3일 안에 앱 알림이 나온 종목 → 타점 상세 화면 차트(분·시·일·월)를 저장
 RECENT = []                                      # 최근 3일 앱 알림 (알림 뒤 최고·최저·지금 계산용)
+CANCELS = []                                     # 이번 실행에서 '돌파 실패 → 매수 신호 취소'된 알림
 APP_FLOOR = 5          # 앱에는 신호 점수 5점 이상 후보를 모두 저장 → 사용자가 앱 설정(지표 켜고 끄기)으로 골라 받음
 TZ = {"us": NY, "kr": KST, "crypto": timezone.utc}
 MARKET_KO = {"kr": "국장", "us": "미장", "crypto": "코인"}
 INDEX = {"kr": "069500.KS", "us": "SPY", "crypto": "BTC-KRW"}           # 시장 필터에 쓰는 대표 지수
 GUARD_DEFAULT = {"시장_필터": True, "추세_필수": True, "눌림_매수": True, "변동성_필터": True,
                  "실적_피하기": True, "반_매도": True, "하루_한번": True, "성적표": True, "자동_멈춤": True}
+# 2026-11-28 추가 장치 (성적표를 다시 만들지 않게 따로 둠): 가짜 돌파 취소 · 경제 일정 전 쉬기 · 국장 수급 · 레버리지 ETF 전용 기준
+GUARD_EXTRA = {"가짜_돌파": True, "일정_피하기": True, "수급_확인": True, "레버_관리": True}
 REBOUND_ATR = 1.5                                                       # 매도 알림: 반등해도 ATR 1.5배 안쪽 저항까지만
 TRAIL_ATR = 2.0                                                         # 반 매도 후 나머지: 고점에서 ATR 2배 빠지면 매도
 STATE_DIR = ".alert_state"
@@ -140,7 +148,7 @@ def guard_on(market, name):
     g = S.get("손실_방지", {})
     if isinstance(g.get(MARKET_KO[market]), dict):
         g = {**g, **g[MARKET_KO[market]]}
-    return bool(g.get(name, GUARD_DEFAULT[name]))
+    return bool(g.get(name, GUARD_DEFAULT.get(name, GUARD_EXTRA.get(name, True))))
 
 
 # ---------- 시장 시간 ----------
@@ -653,21 +661,23 @@ def money(market, x):
     return f"{x:,.0f}원" if x >= 100 else f"{x:,.2f}원"
 
 
-def position(market, buy, stop):
-    """예산 안에서, 손절가에 걸려도 정한 금액(손절_최대손실) 넘게 안 잃는 수량 → (설명, 손절 시 손실액)"""
+def position(market, buy, stop, scale=1.0):
+    """예산 안에서, 손절가에 걸려도 정한 금액(손절_최대손실) 넘게 안 잃는 수량 → (설명, 손절 시 손실액)
+    scale: 레버리지 ETF는 예산 · 최대 손실을 배수만큼 줄임 (3배면 1/3)"""
     risk = max(buy - stop, 1e-9)
+    b_usd, l_usd, b_krw, l_krw = BUDGET_USD * scale, MAX_LOSS_USD * scale, BUDGET_KRW * scale, MAX_LOSS_KRW * scale
     if market == "us":
-        amt = min(BUDGET_USD, MAX_LOSS_USD / risk * buy)          # 살 금액($)
+        amt = min(b_usd, l_usd / risk * buy)                    # 살 금액($)
         q = int(amt // buy)
         if q >= 1:
             return f"{q}주", q * risk
         return f"${amt:,.0f}어치(소수점)", amt / buy * risk
     if market == "kr":
-        if BUDGET_KRW < buy:
+        if b_krw < buy:
             return "예산 부족", 0.0
-        q = int(min(BUDGET_KRW // buy, MAX_LOSS_KRW // risk))
+        q = int(min(b_krw // buy, l_krw // risk))
         return (f"{q}주", q * risk) if q >= 1 else ("손절폭 큼", 0.0)
-    amt = min(BUDGET_KRW, MAX_LOSS_KRW / risk * buy)
+    amt = min(b_krw, l_krw / risk * buy)
     amt = amt // 10000 * 10000 if amt >= 10000 else amt // 1000 * 1000
     if amt <= 0:
         return "손절폭 큼", 0.0
@@ -678,7 +688,8 @@ def label(market, ticker, names):
     return f"{names[ticker]} {ticker}" if market == "us" else names[ticker]
 
 
-def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None, stab=None):
+def build_message(market, category, ticker, names, side, trig, score, checks, lv, hist=None, stab=None, extra=None):
+    """extra: 꼭 보여 줄 경고 (시장 추세 · 일정 · 수급 · 레버리지) — 200자를 넘어도 다른 줄보다 먼저 남김"""
     when = trig["time"].astimezone(KST).strftime("%H:%M")
     p = lv["price"]
     why = trig["reasons"][0] + (" 외" if len(trig["reasons"]) > 1 else "")
@@ -689,13 +700,13 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
         lines = [f"🔴 매수 · {label(market, ticker, names)}", where,
                  f"신호 점수 {score}/10 · 점검 {GRADE_ICON[grade]}{grade}" + (f" ({passed}/{total})" if total else "")]
         gap = (p / lv["buy"] - 1) * 100
-        qty, loss = position(market, lv["buy"], lv["stop"])
+        qty, loss = position(market, lv["buy"], lv["stop"], lv.get("scale", 1.0))
         lines += [f"🔴 매수 기준가 {money(market, lv['buy'])} · {qty}" + (f" ({gap:.1f}% 위 대기)" if gap > 1 else " (지금 가능)"),
                   f"⛔ 손절가 {money(market, lv['stop'])}" + (f" → -{money(market, loss)}" if loss > 0 else "")]
         if guard_on(market, "반_매도"):
             trail = money(market, tick_round(market, TRAIL_ATR * lv["atr"]))
-            lines += [f"🔵 {money(market, lv['sell'])}에서 절반 매도, ⛔→매수가",
-                      f"나머지는 고점-{trail}에 매도"]
+            lines += [f"🔵 {money(market, lv['sell'])}에서 절반 매도, ⛔→매수가"]
+            (optional if extra else lines).append(f"나머지는 고점-{trail}에 매도")
         else:
             lines += [f"🔵 매도 기준가 {money(market, lv['sell'])} (손익비 {lv['rr']:.1f})"]
         if misses:
@@ -716,6 +727,9 @@ def build_message(market, category, ticker, names, side, trig, score, checks, lv
         lines.append("재매수는 🔴 매수 알림 올 때만")
     if market == "kr":
         optional.append("⚠️ 국장 시세 지연 가능")
+    if extra and side == "buy":                   # 시장 추세 · 일정 · 수급 · 레버리지 경고는 점수 줄 바로 아래 (최대 2줄)
+        lines[3:3] = list(extra)[:2]
+        optional = list(extra)[2:] + optional
     missed = [n for n, ok in checks if not ok]
     if missed:
         optional.append("부족: " + ", ".join(missed))
@@ -1026,6 +1040,9 @@ def morning_brief(book, state, card, now):
         for m in mks:
             if idx.get(INDEX[m]) is not None:
                 out["flow"][m] = market_ok(m, idx.get(INDEX[m]), now)
+            reg = (book["flags"].get("regime") or {}).get(m) or {}
+            if reg.get("st") and reg.get("at", "") >= (now - timedelta(days=4)).isoformat():
+                out["flow"][m] = reg["st"] != "down"          # 지수 추세(상승·횡보·하락)를 본 결과가 있으면 그걸로
     except Exception as e:
         log(f"아침 브리핑: 시장 흐름 실패 ({e})")
     since = now - timedelta(hours=24)
@@ -1115,9 +1132,29 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
     tickers = list(names)
     idx = INDEX[market]
     need_idx = guard_on(market, "시장_필터")
-    daily = fetch_many(list(dict.fromkeys(tickers + ([idx] if need_idx else []))), "2y", "1d")
-    mkt_ok = market_ok(market, daily.get(idx), now) if need_idx else True
-    log(f"[{market}] 시장 필터: {'통과' if mkt_ok else '하락장 → 매수 알림 멈춤'}")
+    extra_idx = [idx] + mc.regime_tickers(market) + mc.lev_bases(tickers)
+    daily = fetch_many(list(dict.fromkeys(tickers + extra_idx)), "2y", "1d")
+    mkt_ok = market_ok(market, daily.get(idx), now) if need_idx else True     # 지수 추세를 못 받으면 예전 방식
+    ctx = {"R": None, "base": {}, "flow": None, "earn": {}, "brk": None, "daily": daily}
+    try:                                           # 시장 전체 추세 (상승장 · 횡보장 · 하락장)
+        ctx["R"] = mc.regime(daily, market, now)
+    except Exception as e:
+        log(f"[{market}] 시장 추세 계산 실패 ({type(e).__name__})")
+    if ctx["R"] and book is not None:
+        book["flags"].setdefault("regime", {})[market] = {**ctx["R"], "at": now.isoformat()}
+    for b in mc.lev_bases(tickers):               # 레버리지 ETF의 기초 지수 상태
+        try:
+            ctx["base"][b] = mc.index_state(daily.get(b), mc.IDX_TZ.get(b, mc.ET if market != "kr" else mc.KST), now, mc.CRASH[market])
+        except Exception:
+            ctx["base"][b] = None
+    if book is not None:
+        ctx["flow"] = book["flags"].setdefault("flow", {})
+        mc.prune_flow(ctx["flow"], now)
+        ctx["earn"] = (book["flags"].get("semi_earn") or {}).get("ev") or {}
+        ctx["brk"] = book["flags"].setdefault("brk", {})
+    R = ctx["R"]
+    log(f"[{market}] 시장 추세: " + (f"{mc.STATE_KO[R['st']]} (반도체 {mc.STATE_KO[R['semi']]})" + (" · 급락" if R["crash"] else "")
+                                if R else ("예전 필터 " + ("통과" if mkt_ok else "하락장"))))
     hourly = fetch_many(tickers, "60d", "60m")
     minute = fetch_many(tickers, "2d", "1m", prepost=(market == "us" and US_EXT))
     paused = False
@@ -1139,10 +1176,15 @@ def scan_market(market, cats, now, force, state, alerts, stats, card=None, book=
         stats["checked"] += 1
         try:
             check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts, mkt_ok, card,
-                         paused, book)
+                         paused, book, ctx)
         except Exception as e:
             stats["failed"] += 1
             log(f"{t}: 확인 실패 ({e})")
+    try:                                           # 돌파 매수 알림 뒤 다시 저항선 아래로 → 매수 신호 취소
+        if book is not None:
+            breakout_cancels(market, tickers, names, minute, now, book)
+    except Exception as e:
+        log(f"[{market}] 돌파 취소 확인 실패 ({type(e).__name__})")
     try:
         store_charts(market, tickers, daily, hourly, minute, now, alerts)
     except Exception as e:
@@ -1273,8 +1315,112 @@ def sell_linked(state, book, t, now):
     return False
 
 
+def extra_checks(market, t, cat, d, m, trig, lv, score, now, ctx):
+    """2026-11-28 추가 점검 → (flags에 더할 것, 카톡 막는 이유, 앱·카톡 모두 막는 이유, 앱 막는 이유, 카톡 경고 줄, 앱 정보)"""
+    add, kblock, hard, ablock, lines, info = {}, [], [], [], [], {}
+    R = (ctx or {}).get("R")
+    semi = mc.is_semi(t, cat)
+    st, crash = mc.state_for(R, semi)
+    if st:
+        add["장세"] = mc.STATE_KO[st]
+        info["mkt"] = {"st": st, "semi": semi, "crash": crash,
+                       "idx": [{"n": x["n"], "st": x["st"], "d1": x["d1"]} for x in R["items"] if semi or x["n"] in mc.MAIN[market]]}
+        if st == "down" and guard_on(market, "시장_필터"):
+            kblock.append("시장 하락장")
+            if score < mc.DOWN_MIN_SCORE:
+                ablock.append("하락장이라 강한 신호만")
+            lines.append("📉 시장 하락장 · 신중하게")
+        elif st == "side":
+            lines.append("〰️ 시장 횡보장")
+    # 가짜 돌파
+    tz = TZ[market]
+    closed = closed_days(d, market, now) if market != "crypto" else d.iloc[:-1]
+    if market == "crypto":
+        m_today = m[m.index >= m.index[-1] - pd.Timedelta(hours=24)]
+    else:
+        loc = m.index.tz_convert(tz) if m.index.tz is not None else m.index
+        m_today = m[pd.Index(loc.date) == loc[-1].date()]
+    avg_vol = float(closed["Volume"].iloc[-20:].mean()) if len(closed) >= 20 else None
+    pace = mc.day_pace(market, m_today, avg_vol, m.index[-1])
+    bo = mc.breakout(closed, m_today, lv["price"], trig.get("volr"), pace)
+    if bo["st"] != "none":
+        add["돌파"] = bo["st"] == "ok"
+        info["brk"] = {"st": bo["st"], "why": bo.get("why"), "res": float(tick_round(market, bo["res"])), "pace": round(pace, 2) if pace else None}
+        if bo["st"] == "fail" and guard_on(market, "가짜_돌파"):
+            hard.append("가짜 돌파 (" + bo["why"] + ")")
+        elif bo["st"] == "weak":
+            lines.append("⚠️ 거래량 없는 돌파")
+    # 경제 일정 · 반도체 실적
+    ev = mc.event_check(market, t, semi, now, (ctx or {}).get("earn"), S.get("경제_일정_추가"))
+    if ev["items"]:
+        add["일정"] = ev["lvl"] < 2
+        info["ev"] = ev["items"][:3]
+        lines.insert(0, "🗓️ " + ev["items"][0]["n"] + (" 앞 · 매수 주의" if ev["lvl"] >= 2 else " 앞"))
+        if ev["lvl"] >= 2 and guard_on(market, "일정_피하기"):
+            kblock.append("주요 일정 앞")
+    # 국장 수급
+    if market == "kr" and (ctx or {}).get("flow") is not None:
+        try:
+            fl = mc.get_flow(t.split(".")[0], ctx["flow"], now, lv["price"], key=hid(t))
+        except Exception:
+            fl = None
+        if fl:
+            add["수급"] = bool(fl["ok"])
+            info["flow"] = fl
+            lines.append(("⚠️ " if not fl["ok"] else "") + mc.flow_line(fl))
+            if not fl["ok"] and guard_on(market, "수급_확인"):
+                kblock.append("외국인·기관 동반 순매도")
+    # 레버리지 ETF
+    L = mc.lev_of(t)
+    if L:
+        x, base, base_name = L
+        try:
+            li = mc.lev_info(x, d, (ctx or {}).get("daily", {}).get(base))
+        except Exception:
+            li = None
+        bs = ((ctx or {}).get("base") or {}).get(base)
+        ok, whys, hard_l = mc.lev_check(x, li, bs["st"] if bs else st, (bs or {}).get("crash", crash), ev["lvl"],
+                                        score, min_score(market) + 1)
+        add["레버"] = ok
+        info["lev"] = {**(li or {"x": x}), "base": base_name, "base_st": (bs or {}).get("st"), "why": whys, "split": mc.LEV_SPLIT_MAX}
+        lv["scale"] = 1 / abs(x)
+        lines.insert(0, mc.lev_line(x, li))
+        if guard_on(market, "레버_관리"):
+            if hard_l:
+                hard.append("레버리지: " + ", ".join(w for w in whys if "급락" in w))
+            elif not ok:
+                kblock.append("레버리지 기준: " + ", ".join(whys))
+    return add, kblock, hard, ablock, lines, info
+
+
+def breakout_cancels(market, tickers, names, minute, now, book):
+    """돌파로 매수 알림이 나간 종목이 다시 저항선 아래로 내려오면 → 매수 신호 취소 (카톡 · 앱 푸시)"""
+    brk = book["flags"].get("brk") or {}
+    by_h = {hid(t): t for t in tickers}
+    for key, x in list(brk.items()):
+        if x.get("m") != market:
+            continue
+        if x.get("until", "") < now.isoformat():
+            brk.pop(key, None)
+            continue
+        t = by_h.get(x.get("h"))
+        if not t:
+            continue
+        m = minute.get(t)
+        if m is None or not len(m):
+            continue
+        last = m["Close"].dropna()
+        if len(last) < 3:
+            continue
+        px = float(last.iloc[-3:].mean())                # 마지막 3분 평균 (순간 튀는 값 무시)
+        if px < x["lvl"] * 0.995:
+            CANCELS.append({**x, "price": px, "t": t, "name": label(market, t, names)})
+            brk.pop(key, None)
+            log(f"돌파 실패 → 매수 신호 취소 1건 ({market})")
+
+
 def check_ticker(market, t, names, category, daily, hourly, minute, now, force, state, alerts, mkt_ok=True,
-                 card=None, paused=False, book=None):
+                 card=None, paused=False, book=None, ctx=None):
     d, m = daily.get(t), minute.get(t)
     if d is None or len(d) < 220 or m is None:
         log(f"{t}: 데이터 부족 → 건너뜀")
@@ -1313,13 +1459,22 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
         akey = f"app|{hid(t)}|{side}"           # 앱 (사용자마다 설정이 달라서 후보를 넓게 저장)
         word = "매수" if side == "buy" else "매도"
         stab, blocked, hard, flags = None, [], [], None
+        kblock, ablock, xlines, xinfo = [], [], [], {}
         if side == "buy":
-            gf = guard_flags(d, lv["price"], mkt_ok, earn_ok)
-            flags = {**gf, "성적": bool(card_ok)}
+            add = {}
+            try:
+                add, kblock, xhard, ablock, xlines, xinfo = extra_checks(market, t, category[t], d, m, trig, lv, score, now, ctx)
+                hard += xhard
+            except Exception as e:
+                log(f"추가 점검 실패 ({type(e).__name__})")
+            st_ = (xinfo.get("mkt") or {}).get("st")
+            m_ok = (st_ != "down") if (st_ and guard_on(market, "시장_필터")) else mkt_ok
+            gf = guard_flags(d, lv["price"], m_ok, earn_ok)
+            flags = {**gf, "성적": bool(card_ok), **add}
             stab = stability(market, gf, card_ok, card_why, paused)
             if GRADE_RANK[stab[0]] < GRADE_RANK[MIN_GRADE]:
                 blocked.append(f"점검 {stab[0]} (설정한 최소 {MIN_GRADE})")
-            if position(market, lv["buy"], lv["stop"])[0] == "손절폭 큼":
+            if position(market, lv["buy"], lv["stop"], lv.get("scale", 1.0))[0] == "손절폭 큼":
                 hard.append("손절폭이 손실 한도보다 큼")
         else:
             flags = {"linked": sell_linked(state, book, t, now)}
@@ -1349,7 +1504,11 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
             log(f"{t}: {word} 타점 {score}/10 이지만 카톡 막음 ({', '.join(blocked + hard)})")
         else:
             to_kakao = True
-        if app_bridge.enabled() and t not in KAKAO_ONLY and not hard and score >= APP_FLOOR and not in_cooldown(state, akey, now, market, once) \
+        if to_kakao and side == "buy" and (kblock or hard):
+            to_kakao = False
+            log(f"{t}: 매수 타점 {score}/10 이지만 카톡 쉼 ({', '.join(hard + kblock)})")
+        if app_bridge.enabled() and t not in KAKAO_ONLY and not hard and not ablock and score >= APP_FLOOR \
+                and not in_cooldown(state, akey, now, market, once) \
                 and (side == "buy" or sell_repeat_ok(book, akey, lv["price"], now, market)):
             to_app_ = True
         if to_kakao or to_app_:
@@ -1357,11 +1516,11 @@ def check_ticker(market, t, names, category, daily, hourly, minute, now, force, 
                            "market": market, "category": category[t], "name": names[t],
                            "side": side, "price": lv["price"], "ticker": t, "lv": lv, "bar": m.index[-1],
                            "grade": stab[0] if stab else None, "score": score, "stab": stab, "hist": hist,
-                           "flags": flags,
+                           "flags": flags, "xinfo": xinfo, "xlines": xlines,
                            "why": f"{trig['time'].astimezone(KST):%H:%M} " + sess_tag(market, trig["time"]) + trig["reasons"][0]
                                   + (" 외" if len(trig["reasons"]) > 1 else ""),
                            "msg": build_message(market, category[t], t, names, side, trig, score, checks, lv,
-                                                hist, stab)})
+                                                hist, stab, xlines)})
     if not found:
         log(f"{t}: 확정된 타점 없음")
 
@@ -1373,18 +1532,22 @@ def app_item(a):
     market, lv = a["market"], a["lv"]
     names = {a["ticker"]: a["name"]}
     title = label(market, a["ticker"], names)
+    flags = a.get("flags")
+    if a["side"] == "buy" and isinstance(flags, dict) and a.get("xinfo"):
+        flags = {**flags, "x": a["xinfo"]}                 # 시장 추세 · 수급 · 돌파 · 일정 · 레버리지 정보 (앱 상세 화면용)
     row = {"market": market, "category": a["category"], "name": title, "side": a["side"],
            "score": int(a["score"]), "reason": a["why"], "price": float(lv["price"]),
-           "flags": a.get("flags"), "yt": a["ticker"]}
+           "flags": flags, "yt": a["ticker"]}
     if a["side"] == "buy":
         grade, passed, total, misses = a["stab"]
-        qty, loss = position(market, lv["buy"], lv["stop"])
+        qty, loss = position(market, lv["buy"], lv["stop"], lv.get("scale", 1.0))
         row.update(grade=grade, passed=passed, total=total, misses=misses, buy=float(lv["buy"]),
                    stop=float(lv["stop"]), sell=float(lv["sell"]), qty=qty, loss=round(float(loss), 4),
                    trail=float(tick_round(market, TRAIL_ATR * lv["atr"])), half=guard_on(market, "반_매도"),
                    hist=a.get("hist"))
         push = {"title": f"🔴 매수 · {title}",
-                "body": f"점검 {grade} {passed}/{total} · 매수 {money(market, lv['buy'])} · 손절 {money(market, lv['stop'])}"}
+                "body": f"점검 {grade} {passed}/{total} · 매수 {money(market, lv['buy'])} · 손절 {money(market, lv['stop'])}"
+                        + (f"\n{a['xlines'][0]}" if a.get("xlines") else "")}
     else:
         near = lv.get("res_near")
         row.update(rebound=float(near) if near else None)
@@ -1420,15 +1583,18 @@ def to_app(alerts, book, now):
     problem = app_bridge.setup_problem()
     if problem:
         return {"error": problem}
-    items, bad = [], 0
+    items, bad, owners = [], 0, []
     for a in alerts:
         try:
             items.append(app_item(a))
+            owners.append(a)
         except Exception:
             bad += 1                              # 알림 하나가 이상해도 나머지는 보냄
     step = "알림 저장"
     try:
         res = app_bridge.publish(items, now)
+        for a, i, (row, _) in zip(owners, res.pop("ids", None) or [], items):
+            a["app_id"], a["app_row"] = i, row
         step = "상태 저장"
         app_bridge.put_kv("heartbeat", {"at": now.isoformat()})
         step = "기록 저장"
@@ -1438,6 +1604,56 @@ def to_app(alerts, book, now):
         return res
     except Exception as e:
         return {"error": f"{step}: {app_bridge.why(e)}"}
+
+
+def track_breakouts(alerts, book, now):
+    """거래량 동반 돌파로 나간 매수 알림은 다음 날까지 지켜봄 (다시 저항선 아래로 오면 취소 알림)"""
+    brk = book["flags"].setdefault("brk", {})
+    for a in alerts:
+        b = (a.get("xinfo") or {}).get("brk") or {}
+        if a["side"] != "buy" or b.get("st") != "ok" or not (a.get("kakao") or a.get("app_id")):
+            continue
+        row = a.get("app_row") or {}
+        brk[a["akey"]] = {
+            "h": hid(a["ticker"]), "m": a["market"], "lvl": b["res"], "k": bool(a.get("kakao")), "id": a.get("app_id"),
+            "row": {k: row.get(k) for k in ("market", "side", "score", "grade", "misses")} | {"flags": {k: v for k, v in (row.get("flags") or {}).items() if k != "x"}},
+            "until": (now + timedelta(hours=30)).isoformat()}
+
+
+def send_cancels(now):
+    """CANCELS → 카톡(원래 카톡으로 받은 것만) · 앱(알림에 '취소' 표시 + 푸시)"""
+    if not CANCELS:
+        return
+    token = None
+    for c in CANCELS:
+        mk = c["m"]
+        text = (f"⚠️ 매수 신호 취소 · {c['name']}\n돌파했던 {money(mk, c['lvl'])} 아래로 다시 내려왔어요 (가짜 돌파 가능성).\n"
+                f"아직 안 샀다면 사지 마세요. 이미 샀다면 손절가를 꼭 지키세요.\n현재가 {money(mk, tick_round(mk, c['price']))}")
+        if c.get("k"):
+            try:
+                token = token or base.get_access_token()
+                base.send_kakao(token, text[:200])
+                time.sleep(1)
+            except Exception as e:
+                log(f"취소 카톡 실패 ({type(e).__name__})")
+        if c.get("id") and app_bridge.enabled():
+            row = c.get("row") or {}
+            try:
+                app_bridge.cancel_alert(c["id"], {"why": "돌파 실패", "at": now.isoformat(), "px": float(tick_round(mk, c["price"]))})
+                if app_bridge.VAPID_PRIVATE:
+                    push = {"title": f"⚠️ 매수 신호 취소 · {c['name']}", "body": f"돌파했던 {money(mk, c['lvl'])} 아래로 다시 내려왔어요",
+                            "url": f"./#/alert/{c['id']}", "tag": f"a{c['id']}"}
+                    app_bridge.send_push(app_bridge.get_subs(), [(row, push)], now)
+            except Exception as e:
+                log(f"취소 앱 표시 실패 ({app_bridge.why(e)})")
+
+
+def market_ctx_kv(book, now):
+    """kv 'mkt_ctx': 시장별 추세 (지수 이름 · 상태 · 등락) + 앞으로 10일 경제 일정 · 반도체 실적"""
+    ev = (book["flags"].get("semi_earn") or {}).get("ev") or {}
+    reg = {mk: r for mk, r in (book["flags"].get("regime") or {}).items() if isinstance(r, dict)}
+    return {"at": now.isoformat(), "regime": reg, "events": mc.upcoming(now, ev, 10, S.get("경제_일정_추가")),
+            "macro_last": max(t for _, t in mc.MACRO)[:10]}
 
 
 def with_my_hold(market, cats):
@@ -1557,6 +1773,16 @@ def main():
             state[a["akey"]] = now.isoformat()
             if a["side"] == "sell":
                 sell_mark(book, a["akey"], a["price"], now)
+    try:
+        track_breakouts(alerts, book, now)
+        send_cancels(now)
+    except Exception as e:
+        log(f"돌파 취소 처리 실패 ({app_bridge.why(e)})")
+    try:                                          # 앱 '시장 분위기' · '다가오는 일정' 카드
+        if app_bridge.enabled():
+            app_bridge.put_kv("mkt_ctx", market_ctx_kv(book, now))
+    except Exception as e:
+        log(f"시장 분위기 저장 실패 ({app_bridge.why(e)})")
     save_state(state, now)
     hold_note = ""
     try:                                          # 앱 '보유' 탭 분석 (알림을 다 보낸 뒤)
@@ -1587,6 +1813,16 @@ def main():
     except Exception as e:
         log(f"답글 메일 실패 ({app_bridge.why(e)})")
         hold_note += " · 답글 메일 실패"
+    try:                                          # 반도체 주요 기업 다음 실적 발표일 (하루 한 번, 알림을 다 보낸 뒤)
+        mc.semi_earn_job(book["flags"], now, earnings_dates, log)
+    except Exception as e:
+        log(f"반도체 실적 일정 실패 ({type(e).__name__})")
+    try:                                          # 매수 신호 실제 성적 (하루 한 번)
+        if signal_stats:
+            hold_note += signal_stats.run(sys.modules[__name__], book, now)
+    except Exception as e:
+        log(f"신호 성적 실패 ({app_bridge.why(e)})")
+        hold_note += " · 신호 성적 실패"
     save_book(book, now)
     # 공개 기록에는 종목 이름 없이 숫자만 남김
     tail = ""
@@ -1627,7 +1863,7 @@ def engine_status(now, t_start, scanned, stats, alerts, app, mode, book, force):
         "min_score": _SCORE, "min_grade": MIN_GRADE, "confirm_min": CONFIRM_MIN, "min_rr": MIN_RR, "stop_atr": STOP_ATR,
         "cooldown_min": COOLDOWN_MIN, "sell_all": SELL_ALL, "sell_link_days": SELL_LINK_DAYS, "brief": BRIEF,
         "trail_atr": TRAIL_ATR, "rebound_atr": REBOUND_ATR, "earn_days": EARN_DAYS, "fee": FEE, "app_floor": APP_FLOOR,
-        "guards": {mk: {g: guard_on(mk, g) for g in GUARD_DEFAULT} for mk in MARKETS},
+        "guards": {mk: {g: guard_on(mk, g) for g in {**GUARD_DEFAULT, **GUARD_EXTRA}} for mk in MARKETS},
         "score_by_market": {mk: min_score(mk) for mk in MARKETS},
     }
     live = {"open": len(book.get("open") or []), "closed": len(book.get("closed") or []),

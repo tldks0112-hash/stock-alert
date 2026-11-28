@@ -229,6 +229,20 @@ def passes(alert, rule):
     return True
 
 
+PROTECT = ("일정", "수급", "돌파", "레버")                     # 추가 보호 장치 (앱 '지표 설정'에서 켜고 끔 · 기본 켜짐)
+
+
+def protect_ok(p, alert):
+    """켜 둔 추가 보호 장치에 걸린 매수 알림은 빼요 (앱 화면과 같은 규칙)"""
+    flags = alert.get("flags")
+    if not isinstance(flags, dict):
+        return True
+    if flags.get("cancel"):
+        return False
+    prot = p.get("protect") if isinstance(p.get("protect"), dict) else {}
+    return all(not (prot.get(k, True) and flags.get(k) is False) for k in PROTECT)
+
+
 def wants(prefs, alert, now):
     """이 사용자가 이 알림을 받고 싶어 하나 (앱 '알림 설정' 그대로)"""
     p = {**DEFAULT_PREFS, **(prefs or {})}
@@ -249,6 +263,8 @@ def wants(prefs, alert, now):
             need = GRADE_RANK.get(p["minGrade"], 1)
             if GRADE_RANK.get(alert.get("grade") or "높음", 2) < need:
                 return False
+    if alert["side"] == "buy" and not protect_ok(p, alert):
+        return False
     if p["quiet"] and now.astimezone(KST).hour < 7:          # 방해 금지: 밤 12시 ~ 아침 7시
         return False
     return True
@@ -334,4 +350,9 @@ def publish(items, now):
         push["url"] = f"./#/alert/{i}"
         push["tag"] = f"a{i}"
     sent, gone = send_push(get_subs(), items, now) if VAPID_PRIVATE else (0, 0)
-    return {"saved": len(ids), "pushed": sent, "removed": gone}
+    return {"saved": len(ids), "pushed": sent, "removed": gone, "ids": ids}
+
+
+def cancel_alert(i, cancel):
+    """저장된 매수 알림 하나에 '취소' 표시 (flags.cancel만 더하고 나머지는 그대로)"""
+    return rpc("engine_alert_cancel", {"p_id": int(i), "p_cancel": cancel})

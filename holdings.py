@@ -8,15 +8,18 @@
 공개 실행 기록에는 종목 이름·코드를 남기지 않고 개수만 남겨요.
 """
 import json
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import requests
 
 import app_bridge as ab
+import market_ctx as mc
 
 H = (1, 5, 20)                                         # 예상 기간 (거래일)
 IND = [("trend", "단기 상승세"), ("mid", "중기 상승세"), ("align", "상승 정렬"), ("mom", "사는 힘 우세"),
@@ -265,6 +268,16 @@ def analyze(rt, market, df, mkt, now, mstat=None, fund=None):
                   "calm": (lambda q: None if q is None else 100 - q)(_pctile(v["sd20"])),
                   "mkt": (mstat or {}).get("pct")}
     out["spark"] = [_r(x, 4) for x in c.iloc[-63:].tolist()]           # 최근 3개월 종가 (작은 그래프)
+    try:                                               # 다른 투자자 예상 평단: 최근 20 · 60거래일 거래량 가중 평균가
+        tp = (closed["High"] + closed["Low"] + closed["Close"]) / 3
+        vol = closed["Volume"].fillna(0)
+        vw = {}
+        for n in (20, 60):
+            vs = float(vol.iloc[-n:].sum())
+            vw[f"d{n}"] = _r(float((tp.iloc[-n:] * vol.iloc[-n:]).sum()) / vs, 4) if vs > 0 else None
+        out["vwap"] = vw
+    except Exception:
+        out["vwap"] = None
     if market != "crypto":                             # 실적 발표일 · 배당
         dr = _f(fund, "dividendRate")
         out["events"] = {"earn": (fund or {}).get("earn"), "exdiv": (fund or {}).get("exdiv"),
@@ -278,6 +291,18 @@ def analyze(rt, market, df, mkt, now, mstat=None, fund=None):
         out["legend"] = []
         out["legend_err"] = type(e).__name__
     return out
+
+
+def extras(rt, market, t, res, df, bdata, fcache, now):
+    """2026-11-28: 국장 수급 (하루 한 번) · 레버리지 ETF 위험 · 반도체 여부 (SOX를 함께 볼 종목)"""
+    if market == "kr" and not t.startswith("^"):
+        res["flow"] = mc.get_flow(t.split(".")[0], fcache, now, res.get("price"), key=rt.hid(t))
+    L = mc.lev_of(t)
+    if L:
+        info = mc.lev_info(L[0], df, bdata.get(L[1]))
+        res["lev"] = {**(info or {"x": L[0]}), "base": L[2], "split": mc.LEV_SPLIT_MAX}
+    if mc.is_semi(t):
+        res["semi"] = True
 
 
 # ---------- 한눈에 보기: 5가지 축 (0~100) ----------
@@ -615,6 +640,128 @@ def us_ext_job(rt, reqs, now, flags):
     ab.put_kv("us_ext", {"at": now.isoformat(), "s": phase, "px": px})
     return len(px)
 
+
+# ---------- 미장 데이마켓(주간거래) 가격 — 한국투자증권 Open API (키가 있을 때만) ----------
+# 한국 시간 평일 낮(애프터마켓이 끝나고 프리마켓 전)에 10분마다, 앱 보유의 미장 종목 가격 → kv 'us_ext' (s='day')
+# 접근 토큰은 하루 짜리라 서버 kv(앱에서 못 읽는 곳)에 두고 다시 써요. 키 · 토큰은 기록에 남기지 않아요.
+KIS = "https://openapi.koreainvestment.com:9443"
+KIS_KEY = ab._clean(os.environ.get("KIS_APP_KEY"))
+KIS_SECRET = ab._clean(os.environ.get("KIS_APP_SECRET"))
+DAY_EXCD = {"NASDAQ": "BAQ", "NYSE": "BAY"}         # 그 밖(아멕스 · NYSE Arca 등)은 BAA
+
+
+def kis_on():
+    return bool(KIS_KEY and KIS_SECRET and ab.enabled())
+
+
+def kis_token(now):
+    tk = ab.get_kv("kis_tok") or {}
+    try:
+        if tk.get("t") and datetime.fromisoformat(tk["exp"]) > now + timedelta(hours=1):
+            return tk["t"]
+    except (TypeError, ValueError, KeyError):
+        pass
+    r = requests.post(f"{KIS}/oauth2/tokenP", timeout=15,
+                      json={"grant_type": "client_credentials", "appkey": KIS_KEY, "appsecret": KIS_SECRET})
+    if r.status_code != 200:
+        raise RuntimeError(f"한국투자 토큰 {r.status_code}")
+    j = r.json() or {}
+    t = j.get("access_token")
+    if not t:
+        raise RuntimeError("한국투자 토큰 없음")
+    exp = now + timedelta(seconds=int(j.get("expires_in") or 86400) - 120)
+    ab.put_kv("kis_tok", {"t": t, "exp": exp.isoformat()})
+    return t
+
+
+def kis_day_quote(tok, yt, exch):
+    """데이마켓 현재가 → [가격, 전일 대비 %, 시각] · 오늘 데이마켓 거래가 없으면 None"""
+    excd = DAY_EXCD.get(str(exch or "").upper(), "BAA")
+    r = requests.get(f"{KIS}/uapi/overseas-price/v1/quotations/price", timeout=10,
+                     params={"AUTH": "", "EXCD": excd, "SYMB": yt.replace("-", "/")},
+                     headers={"authorization": f"Bearer {tok}", "appkey": KIS_KEY, "appsecret": KIS_SECRET,
+                              "tr_id": "HHDFS00000300", "custtype": "P", "content-type": "application/json; charset=utf-8"})
+    if r.status_code != 200:
+        return None
+    o = (r.json() or {}).get("output") or {}
+    try:
+        last, rate, vol = float(o.get("last") or 0), float(o.get("rate") or 0), float(o.get("tvol") or 0)
+    except (TypeError, ValueError):
+        return None
+    if last <= 0 or vol <= 0:
+        return None
+    return [round(last, 4), round(rate, 2)]
+
+
+def us_day_job(rt, reqs, now, flags):
+    """데이마켓 시간(한국 평일 09:00~18:30 중 미장 '그 밖' 시간)에 10분마다 → kv 'us_ext' s='day'"""
+    if not kis_on() or us_phase(rt, now) != "day":
+        return None
+    k = now.astimezone(rt.KST)
+    if k.weekday() >= 5 or not (9 * 60 <= k.hour * 60 + k.minute < 18 * 60 + 30):
+        return None
+    if not _old(flags.get("us_day"), now, EXT_EVERY):
+        return None
+    flags["us_day"] = now.isoformat()
+    us = list(dict.fromkeys(r["yt"] for r in reqs if r.get("market") == "us"))[:EXT_MAX]
+    if not us:
+        return None
+    exch = {}
+    try:
+        for row in _get_in("symbols", "yt,exch", us):
+            exch[row["yt"]] = row.get("exch")
+    except Exception:
+        pass
+    tok = kis_token(now)
+    px = {}
+    for t in us:
+        try:
+            q = kis_day_quote(tok, t, exch.get(t))
+        except Exception:
+            q = None
+        if q:
+            px[t] = q + [now.isoformat()]
+        time.sleep(0.08)                              # 한국투자 초당 호출 제한 아래로
+    ab.put_kv("us_ext", {"at": now.isoformat(), "s": "day", "px": px})
+    return len(px)
+
+
+
+# ---------- 타점노트 이용자 평균 평단 (로그인 이용자가 저장한 평단 → 종목마다 5명 이상일 때만 평균 하나로) ----------
+PEER_MIN = 5
+KST = ZoneInfo("Asia/Seoul")
+
+
+def peer_job(now, flags):
+    """하루 한 번: 종목별 이용자 평균 평단 → kv 'peer_avg' {at, min, px: {yt: [평균, 명수]}} (5명 미만 종목은 아예 저장 안 함)"""
+    day = now.astimezone(KST).date().isoformat()
+    if flags.get("peer_avg") == day:
+        return None
+    flags["peer_avg"] = day
+    rows = _get("user_data?select=data")
+    agg = {}
+    for r in rows or []:
+        d = r.get("data") or {}
+        if d.get("tn_peer_off") is True:               # 이용자가 끈 경우 빼기
+            continue
+        seen = set()
+        for h in d.get("tn_hold") or []:
+            if not isinstance(h, dict):
+                continue
+            yt = str(h.get("yt") or "")
+            try:
+                q, a = float(h.get("qty") or 0), float(h.get("avg") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not yt or q <= 0 or a <= 0 or yt in seen:
+                continue
+            seen.add(yt)
+            agg.setdefault(yt, []).append(a)
+    px = {yt: [_r(sum(v) / len(v), 4), len(v)] for yt, v in agg.items() if len(v) >= PEER_MIN}
+    ab.put_kv("peer_avg", {"at": now.isoformat(), "min": PEER_MIN, "px": px})
+    return len(px)
+
+
 def run(rt, book, now):
     """엔진 실행 끝에 호출 → 공개 기록용 짧은 요약 (개수만)"""
     if not ab.enabled():
@@ -646,10 +793,13 @@ def run(rt, book, now):
         for r in reqs:
             by.setdefault(r["market"], []).append(r["yt"])
         rows = []
+        fcache = flags.setdefault("flow", {})
         for market, tickers in by.items():
             idx = rt.fetch_many([rt.INDEX[market]], "2y", "1d").get(rt.INDEX[market])
             mkt = market_series(rt, market, idx)
             mstat = market_stats(rt, market, idx)
+            bases = mc.lev_bases(tickers)
+            bdata = rt.fetch_many(bases, "1y", "1d") if bases else {}
             for i in range(0, len(tickers), 40):
                 data = rt.fetch_many(tickers[i:i + 40], "2y", "1d")
                 for t in tickers[i:i + 40]:
@@ -657,6 +807,11 @@ def run(rt, book, now):
                         res = analyze(rt, market, data.get(t), mkt, now, mstat, fund.get(t))
                     except Exception as e:
                         res = {"ok": False, "err": "계산 오류", "why": type(e).__name__}
+                    if res.get("ok"):
+                        try:
+                            extras(rt, market, t, res, data.get(t), bdata, fcache, now)
+                        except Exception as e:
+                            res["x_err"] = type(e).__name__
                     rows.append({"yt": t, "market": market, "data": res, "updated_at": now.isoformat()})
         _upsert("hold_an", rows, "yt")
         notes.append(f"보유 분석 {len(rows)}개" + ("" if full else " (새 종목)"))
@@ -667,6 +822,18 @@ def run(rt, book, now):
             notes.append(f"미장 시간외 {n_ext}개")
     except Exception as e:
         notes.append(f"미장 시간외 실패 ({type(e).__name__})")
+    try:
+        n_peer = peer_job(now, flags)
+        if n_peer is not None:
+            notes.append(f"이용자 평균 평단 {n_peer}종목")
+    except Exception as e:
+        notes.append(f"이용자 평균 평단 실패 ({type(e).__name__})")
+    try:
+        n_day = us_day_job(rt, reqs_all, now, flags)
+        if n_day is not None:
+            notes.append(f"미장 데이마켓 {n_day}개")
+    except Exception as e:
+        notes.append(f"미장 데이마켓 실패 ({type(e).__name__})")
 
     k = now.astimezone(rt.KST)
     if flags.get("hold_prob") != k.date().isoformat() and k.hour >= 7:
